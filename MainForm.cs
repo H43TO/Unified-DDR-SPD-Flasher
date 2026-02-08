@@ -305,6 +305,7 @@ namespace UnifiedDDRSPDFlasher
 
                 if (_spdDevice != null)
                 {
+                    // Remove event handler to prevent memory leak
                     _spdDevice.AlertReceived -= OnDeviceAlert;
                     _spdDevice.Dispose();
                     _spdDevice = null;
@@ -484,8 +485,14 @@ namespace UnifiedDDRSPDFlasher
                 OnDisconnectRequested(this, EventArgs.Empty);
             }
 
-            _busMonitorTimer?.Stop();
-            _busMonitorTimer?.Dispose();
+            // Properly dispose timer to prevent memory leak
+            if (_busMonitorTimer != null)
+            {
+                _busMonitorTimer.Stop();
+                _busMonitorTimer.Tick -= OnBusMonitorTick;
+                _busMonitorTimer.Dispose();
+                _busMonitorTimer = null;
+            }
 
             base.OnFormClosing(e);
         }

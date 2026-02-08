@@ -114,9 +114,9 @@ namespace UnifiedDDRSPDFlasher
             {
                 Text = "Open Dump",
                 Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                Height = 32, // Reduced from 35
-                Margin = new Padding(2),
+                Font = new Font("Segoe UI", 10F),
+                Height = 30, // Reduced from 35
+                Margin = new Padding(5),
                 Enabled = false
             };
             _openDumpButton.Click += OnOpenDumpClicked;
@@ -125,9 +125,9 @@ namespace UnifiedDDRSPDFlasher
             {
                 Text = "Save Dump",
                 Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                Height = 32, // Reduced from 35
-                Margin = new Padding(2),
+                Font = new Font("Segoe UI", 10F),
+                Height = 30, // Reduced from 35
+                Margin = new Padding(5),
                 Enabled = false
             };
             _saveDumpButton.Click += OnSaveDumpClicked;
@@ -140,7 +140,7 @@ namespace UnifiedDDRSPDFlasher
             _hexViewer = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 9.5F),
+                Font = new Font("Consolas", 13F),
                 ReadOnly = true,
                 BackColor = Color.White,
                 WordWrap = false,
@@ -221,6 +221,7 @@ namespace UnifiedDDRSPDFlasher
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(3),
                 Height = 24
             };
             infoLayout.Controls.Add(_detectedGenLabel, 0, 0);
@@ -231,6 +232,7 @@ namespace UnifiedDDRSPDFlasher
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(3),
                 Height = 24
             };
             infoLayout.Controls.Add(_spdSizeLabel, 0, 1);
@@ -241,6 +243,7 @@ namespace UnifiedDDRSPDFlasher
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
+                Padding = new Padding(3),
                 Height = 24
             };
             infoLayout.Controls.Add(wpLabel, 0, 2);

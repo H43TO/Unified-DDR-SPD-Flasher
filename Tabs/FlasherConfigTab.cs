@@ -343,7 +343,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Pin Control",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                Padding = new Padding(12),
+                Padding = new Padding(2),
                 Enabled = false
             };
 
