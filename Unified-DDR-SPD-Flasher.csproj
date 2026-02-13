@@ -8,6 +8,7 @@
     <OutputType>WinExe</OutputType>
     <RootNamespace>Unified_DDR_SPD_Flasher</RootNamespace>
     <AssemblyName>Unified-DDR-SPD-Flasher</AssemblyName>
+    <LangVersion>14.0</LangVersion>
     <TargetFrameworkVersion>v4.8</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>
     <AutoGenerateBindingRedirects>true</AutoGenerateBindingRedirects>

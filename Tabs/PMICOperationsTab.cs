@@ -833,22 +833,6 @@ namespace UnifiedDDRSPDFlasher
             LogResponse($"PMIC at 0x{_currentPMICAddress:X2} - Info detection pending implementation");
         }
 
-        private byte[] ReadPMICRegister(byte regAddress, byte length)
-        {
-            if (Device == null) return null;
-
-            try
-            {
-                // Use the new ReadI2CDevice method which works for PMIC
-                return Device.ReadI2CDevice(_currentPMICAddress, regAddress, length);
-            }
-            catch (Exception ex)
-            {
-                LogResponse($"✗ Error reading register 0x{regAddress:X2}: {ex.Message}");
-                return null;
-            }
-        }
-
         #endregion
 
         #region Event Handlers
@@ -990,13 +974,11 @@ namespace UnifiedDDRSPDFlasher
 
                 if (data != null && data.Length == 1)
                 {
-                    _regValueText.Text = data[0].ToString("X2");
                     LogResponse($"✓ Register 0x{regAddress:X2} = 0x{data[0]:X2}");
                 }
                 else
                 {
                     LogResponse($"✗ Failed to read register 0x{regAddress:X2}");
-                    _regValueText.Text = "??";
                 }
             }
             catch (FormatException)
@@ -1027,11 +1009,32 @@ namespace UnifiedDDRSPDFlasher
                 byte regValue = Convert.ToByte(_regValueText.Text, 16);
 
                 LogResponse($"[INFO] Writing 0x{regValue:X2} to register 0x{regAddress:X2} on PMIC 0x{_currentPMICAddress:X2}");
-                LogResponse("⚠ PMIC write operations not yet implemented");
+                Cursor = Cursors.WaitCursor;
+
+                // Write single register using the new WriteI2CDevice method
+                bool wData = Device.WriteI2CDevice(_currentPMICAddress, regAddress, regValue);
+                byte[] data = Device.ReadI2CDevice(_currentPMICAddress, regAddress, 1);
+
+                if (wData != false && data.Length == 1)
+                {
+                    LogResponse($"✓ Register 0x{regAddress:X2} = 0x{data[0]:X2}");
+                }
+                else
+                {
+                    LogResponse($"✗ Failed to write register 0x{regAddress:X2}");
+                }
             }
             catch (FormatException)
             {
                 LogResponse("✗ Invalid hex format. Use hex values (00-FF)");
+            }
+            catch (Exception ex)
+            {
+                LogResponse($"✗ Error reading register: {ex.Message}");
+            }
+            finally
+            {
+                Cursor = Cursors.Default;
             }
         }
 

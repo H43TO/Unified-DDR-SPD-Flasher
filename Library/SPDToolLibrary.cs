@@ -680,6 +680,30 @@ namespace SPDTool
         }
 
         /// <summary>
+        /// Writes bytes to any I2C device (including PMIC)
+        /// </summary>
+        /// <param name="address">7-bit I2C address (0x00-0xFF)</param>
+        /// <param name="offset">Byte offset (0-1023)</param>
+        /// <param name="value">Number of bytes to read (1-64)</param>
+        /// <returns>Array of read bytes, or null on error</returns>
+        public bool WriteI2CDevice(byte address, ushort offset, byte value)
+        {
+            if (!IsValidPMICAddress(address))
+                throw new ArgumentException($"Address must be in range 0x{PMIC_ADDRESS_MIN:X2}-0x{PMIC_ADDRESS_MAX:X2}", nameof(address));
+
+            if (offset > 1023)
+                throw new ArgumentException("Offset must be 0-1023", nameof(offset));
+
+            byte offsetLow = (byte)(offset & 0xFF);
+            byte offsetHigh = (byte)((offset >> 8) & 0xFF);
+
+            SendCommand(CMD_SPD_WRITE_BYTE, address, offsetLow, offsetHigh, value);
+            var response = ReadResponse(1500); // Writing takes longer
+
+            return response != null && response.Length > 0 && response[0] == 1;
+        }
+
+        /// <summary>
         /// Writes multiple bytes to SPD EEPROM (page write)
         /// </summary>
         /// <param name="address">7-bit I2C address (0x50-0x57)</param>
