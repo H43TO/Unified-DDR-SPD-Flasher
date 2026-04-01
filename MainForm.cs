@@ -1,7 +1,8 @@
-﻿using System;
+﻿using SPDTool;
+using System;
+using System.Collections.Generic;
 using System.Drawing;
 using System.Windows.Forms;
-using SPDTool;
 
 namespace UnifiedDDRSPDFlasher
 {
@@ -35,6 +36,8 @@ namespace UnifiedDDRSPDFlasher
 
         // Auto-detection timer
         private System.Windows.Forms.Timer _busMonitorTimer;
+        private System.Windows.Forms.Timer _disconnectCheckTimer; // New timer
+
 
         #endregion
 
@@ -111,8 +114,12 @@ namespace UnifiedDDRSPDFlasher
 
             // Setup bus monitoring timer for auto-detection
             _busMonitorTimer = new System.Windows.Forms.Timer();
-            _busMonitorTimer.Interval = 2000; // Check every 2 seconds
+            _busMonitorTimer.Interval = 500; // Check every 0.5 seconds
             _busMonitorTimer.Tick += OnBusMonitorTick;
+
+            _disconnectCheckTimer = new System.Windows.Forms.Timer();
+            _disconnectCheckTimer.Interval = 2000; // Check every 2 seconds
+            _disconnectCheckTimer.Tick += OnDisconnectCheckTick;
         }
 
         private Panel CreateBottomStatusBar()
@@ -210,13 +217,14 @@ namespace UnifiedDDRSPDFlasher
             try
             {
                 string portName = _configTab.GetSelectedPort();
-                int baudRate = _configTab.GetBaudRate();
+                const int baudRate = 115200;
 
                 if (string.IsNullOrEmpty(portName) || portName == "No ports available")
                 {
                     LogError("Please select a valid COM port first.");
                     MessageBox.Show("Please select a valid COM port first.", "Connection Error",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    //_configTab.LogError($"Connection failed: {e.Message}");
                     return;
                 }
 
@@ -227,7 +235,7 @@ namespace UnifiedDDRSPDFlasher
 
                 // Test connection with retry
                 bool pingSuccess = false;
-                for (int attempt = 0; attempt < 3; attempt++)
+                for (int attempt = 0; attempt < 5; attempt++)
                 {
                     try
                     {
@@ -245,7 +253,7 @@ namespace UnifiedDDRSPDFlasher
 
                 if (!pingSuccess)
                 {
-                    throw new Exception("Device not responding to ping after 3 attempts");
+                    throw new Exception("Device not responding to ping after 5 attempts");
                 }
 
                 // Get device info
@@ -265,6 +273,7 @@ namespace UnifiedDDRSPDFlasher
 
                 // Start bus monitoring
                 _busMonitorTimer.Start();
+                _disconnectCheckTimer.Start();
 
                 // Update UI
                 UpdateConnectionState(true);
@@ -287,6 +296,7 @@ namespace UnifiedDDRSPDFlasher
                     "Connection Error",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Error);
+                _configTab.LogError($"Connection failed: {ex.Message}");
 
                 if (_spdDevice != null)
                 {
@@ -300,8 +310,9 @@ namespace UnifiedDDRSPDFlasher
         {
             try
             {
-                // Stop bus monitoring
+                // Stop bus monitoring and diconnect check timers
                 _busMonitorTimer.Stop();
+                _disconnectCheckTimer.Stop();
 
                 if (_spdDevice != null)
                 {
@@ -327,8 +338,33 @@ namespace UnifiedDDRSPDFlasher
             catch (Exception ex)
             {
                 LogError($"Error during disconnect: {ex.Message}");
+                _configTab.LogError($"Disconnect error: {ex.Message}");
             }
         }
+
+        private void OnDisconnectCheckTick(object sender, EventArgs e)
+        {
+            if (_spdDevice != null && _isConnected)
+            {
+                try
+                {
+                    // Try a quick ping to see if device is still there
+                    if (!_spdDevice.Ping())
+                    {
+                        LogError("Device not responding to ping, assuming disconnected");
+                        OnDisconnectRequested(this, EventArgs.Empty);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    // Any exception means device is likely gone
+                    LogError($"Disconnect check failed: {ex.Message}");
+                    _configTab.LogError($"Disconnect check failed: {ex.Message}");
+                    OnDisconnectRequested(this, EventArgs.Empty);
+                }
+            }
+        }
+
 
         private void OnDeviceAlert(object sender, AlertEventArgs e)
         {
@@ -353,25 +389,47 @@ namespace UnifiedDDRSPDFlasher
             {
                 try
                 {
-                    var devices = _spdDevice.ScanBus();
+                    // Scan for SPD devices (0x50-0x57)
+                    var spdDevices = _spdDevice.ScanBus();
+
+                    // Scan for PMIC devices (0x48-0x4F)
+                    var pmicDevices = new List<byte>();
+                    for (byte addr = 0x48; addr <= 0x4F; addr++)
+                    {
+                        try
+                        {
+                            if (_spdDevice.ProbeAddress(addr))
+                                pmicDevices.Add(addr);
+                        }
+                        catch
+                        {
+                            // Ignore errors during probe
+                        }
+                    }
+
+                    // Combine both lists
+                    var allDevices = new List<byte>();
+                    allDevices.AddRange(spdDevices);
+                    allDevices.AddRange(pmicDevices);
 
                     if (InvokeRequired)
                     {
                         Invoke(new Action(() => {
-                            _spdTab.UpdateDetectedDevices(devices);
-                            _pmicTab.UpdateDetectedDevices(devices);
+                            _spdTab.UpdateDetectedDevices(allDevices);
+                            _pmicTab.UpdateDetectedDevices(allDevices);
                         }));
                     }
                     else
                     {
-                        _spdTab.UpdateDetectedDevices(devices);
-                        _pmicTab.UpdateDetectedDevices(devices);
+                        _spdTab.UpdateDetectedDevices(allDevices);
+                        _pmicTab.UpdateDetectedDevices(allDevices);
                     }
                 }
                 catch (Exception ex)
                 {
-                    // Log but don't show error dialog for bus scan failures
-                    System.Diagnostics.Debug.WriteLine($"Bus scan error: {ex.Message}");
+                    LogError($"Bus scan error: {ex.Message}");
+                    _configTab.LogError($"Bus scan error: {ex.Message}");
+                    // If device is gone, trigger disconnect
                 }
             }
         }

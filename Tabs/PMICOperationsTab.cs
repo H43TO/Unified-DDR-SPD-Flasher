@@ -64,6 +64,10 @@ namespace UnifiedDDRSPDFlasher
         {
             InitializeComponent();
             UpdateUIState(false);
+
+            _pmicStabilizeTimer = new System.Windows.Forms.Timer();
+            _pmicStabilizeTimer.Interval = 300;          // 0.3 second delay
+            _pmicStabilizeTimer.Tick += OnPmicStabilizeTimerTick;
         }
 
         #endregion
@@ -658,6 +662,8 @@ namespace UnifiedDDRSPDFlasher
                 return;
             }
 
+            _pmicStabilizeTimer.Stop();               // <-- stop any pending timer
+
             _pmicAddressCombo.Items.Clear();
             _pmicModelLabel.Text = "PMIC Model: Not implemented";
             _pmicModeLabel.Text = "PMIC Mode: Not implemented";
@@ -666,7 +672,7 @@ namespace UnifiedDDRSPDFlasher
             _detectedPMICAddresses.Clear();
             _hexViewer.Clear();
             LogResponse("Device disconnected.");
-            UpdateUIState(true);
+            UpdateUIState(false);
         }
 
         public void UpdateDetectedDevices(List<byte> devices)
@@ -677,51 +683,60 @@ namespace UnifiedDDRSPDFlasher
                 return;
             }
 
-            // PMIC addresses are 0x48-0x4F
             var pmicDevices = devices.Where(a => a >= 0x48 && a <= 0x4F).ToList();
 
-            // Only update if we actually have new PMIC devices
-            if (pmicDevices.Count > 0)
+            bool needsUpdate = false;
+            bool newPmicDetected = false;
+
+            // Add new PMICs
+            foreach (var addr in pmicDevices)
             {
-                bool needsUpdate = false;
-
-                // Add any new PMIC addresses
-                foreach (var addr in pmicDevices)
+                if (!_detectedPMICAddresses.Contains(addr))
                 {
-                    if (!_detectedPMICAddresses.Contains(addr))
-                    {
-                        _detectedPMICAddresses.Add(addr);
-                        needsUpdate = true;
-                    }
-                }
-
-                // Remove PMIC addresses that are no longer present
-                for (int i = _detectedPMICAddresses.Count - 1; i >= 0; i--)
-                {
-                    if (!pmicDevices.Contains(_detectedPMICAddresses[i]))
-                    {
-                        _detectedPMICAddresses.RemoveAt(i);
-                        needsUpdate = true;
-                    }
-                }
-
-                if (needsUpdate)
-                {
-                    UpdatePMICAddressList();
-
-                    // If current PMIC is no longer in list, select first available
-                    if (_detectedPMICAddresses.Count > 0 && !_detectedPMICAddresses.Contains(_currentPMICAddress))
-                    {
-                        _currentPMICAddress = _detectedPMICAddresses[0];
-                        _pmicAddressCombo.SelectedIndex = 0;
-                    }
+                    _detectedPMICAddresses.Add(addr);
+                    needsUpdate = true;
+                    newPmicDetected = true;
+                    LogResponse($"✓ PMIC detected at 0x{addr:X2}");
                 }
             }
-            // If no PMIC devices in scan but we have previously detected ones, keep them
-            else if (_detectedPMICAddresses.Count > 0)
+
+            // Remove disappeared PMICs
+            for (int i = _detectedPMICAddresses.Count - 1; i >= 0; i--)
             {
-                // Don't clear the list - PMICs might be temporarily unavailable
-                // Just update the UI to show they might be disconnected
+                if (!pmicDevices.Contains(_detectedPMICAddresses[i]))
+                {
+                    var removed = _detectedPMICAddresses[i];
+                    _detectedPMICAddresses.RemoveAt(i);
+                    needsUpdate = true;
+                    LogResponse($"✗ PMIC at 0x{removed:X2} removed");
+                }
+            }
+
+            if (needsUpdate)
+            {
+                UpdatePMICAddressList();
+
+                // If current address is gone, select first available
+                if (_detectedPMICAddresses.Count > 0 && !_detectedPMICAddresses.Contains(_currentPMICAddress))
+                {
+                    _currentPMICAddress = _detectedPMICAddresses[0];
+                    _pmicAddressCombo.SelectedIndex = 0;
+                    _pmicStabilizeTimer.Stop();
+                    _pmicStabilizeTimer.Start();           // delay before reading info
+                }
+                else if (_detectedPMICAddresses.Count == 0)
+                {
+                    _currentPMICAddress = 0;
+                    // Clear labels
+                    OnDeviceDisconnected();
+                }
+                else if (newPmicDetected)
+                {
+                    // New PMIC added but current address unchanged -> re‑read info after delay
+                    _pmicStabilizeTimer.Stop();
+                    _pmicStabilizeTimer.Start();
+                }
+
                 UpdateUIState(Device != null);
             }
         }
@@ -729,6 +744,15 @@ namespace UnifiedDDRSPDFlasher
         #endregion
 
         #region PMIC Detection
+
+        private void OnPmicStabilizeTimerTick(object sender, EventArgs e)
+        {
+            _pmicStabilizeTimer.Stop();
+            if (_detectedPMICAddresses.Count > 0 && _currentPMICAddress != 0)
+            {
+                DetectPMICInfo();          // now includes retries
+            }
+        }
 
         private void AutoDetectPMIC()
         {
@@ -738,31 +762,26 @@ namespace UnifiedDDRSPDFlasher
             {
                 Cursor = Cursors.WaitCursor;
 
-                // Clear previous list
                 _detectedPMICAddresses.Clear();
                 _pmicAddressCombo.Items.Clear();
 
                 LogResponse("Scanning for PMIC devices (0x48-0x4F)...");
 
-                // Try multiple times with delays - SPD5 hub might need time to initialize
                 for (int attempt = 1; attempt <= 3; attempt++)
                 {
                     if (attempt > 1)
                     {
                         LogResponse($"Attempt {attempt}...");
-                        Thread.Sleep(1000); // Wait 1 second between attempts
+                        Thread.Sleep(300); // retry delay
                     }
 
                     for (byte addr = 0x48; addr <= 0x4F; addr++)
                     {
-                        // Skip if already detected
-                        if (_detectedPMICAddresses.Contains(addr))
-                            continue;
+                        if (_detectedPMICAddresses.Contains(addr)) continue;
 
                         try
                         {
-                            bool isPresent = Device.ProbeAddress(addr);
-                            if (isPresent)
+                            if (Device.ProbeAddress(addr))
                             {
                                 _detectedPMICAddresses.Add(addr);
                                 LogResponse($"✓ Found PMIC at 0x{addr:X2}");
@@ -770,15 +789,12 @@ namespace UnifiedDDRSPDFlasher
                         }
                         catch (Exception ex)
                         {
-                            // Don't log every error on retry
                             if (attempt == 1)
                                 LogResponse($"✗ Error probing 0x{addr:X2}: {ex.Message}");
                         }
                     }
 
-                    // If we found any PMICs, stop retrying
-                    if (_detectedPMICAddresses.Count > 0)
-                        break;
+                    if (_detectedPMICAddresses.Count > 0) break;
                 }
 
                 if (_detectedPMICAddresses.Count == 0)
@@ -787,6 +803,7 @@ namespace UnifiedDDRSPDFlasher
                     _pmicAddressCombo.SelectedIndex = 0;
                     _pmicAddressCombo.Enabled = false;
                     LogResponse("No PMIC devices found.");
+                    UpdateUIState(true);      // still connected, but no PMIC
                     return;
                 }
 
@@ -796,10 +813,14 @@ namespace UnifiedDDRSPDFlasher
                 LogResponse($"Found {_detectedPMICAddresses.Count} PMIC device(s).");
 
                 // Auto-select first PMIC
-                if (_detectedPMICAddresses.Count > 0)
-                {
-                    _currentPMICAddress = _detectedPMICAddresses[0];
-                }
+                _currentPMICAddress = _detectedPMICAddresses[0];
+
+                // Enable UI buttons
+                UpdateUIState(true);
+
+                // Start delayed reading of PMIC info
+                _pmicStabilizeTimer.Stop();
+                _pmicStabilizeTimer.Start();
             }
             catch (Exception ex)
             {
@@ -829,14 +850,35 @@ namespace UnifiedDDRSPDFlasher
 
         private void DetectPMICInfo()
         {
+            if (Device == null) return;
 
-            _pmicModelLabel.Text = $"PMIC Model: {Device.GetPMICType(_currentPMICAddress)}";
-            _pmicModeLabel.Text = $"PMIC Mode: {Device.GetPMICMode(_currentPMICAddress)}";
-            _outputStatusLabel.Text = "Output Status: Not implemented";
-            _powerGoodLabel.Text = "Power Good: Not implemented";
+            // Retry up to 3 times with 100ms delays
+            for (int attempt = 0; attempt < 3; attempt++)
+            {
+                try
+                {
+                    string model = Device.GetPMICType(_currentPMICAddress);
+                    string mode = Device.GetPMICMode(_currentPMICAddress);
 
-            // Placeholder - PMIC info detection not yet implemented
-            LogResponse($"PMIC at 0x{_currentPMICAddress:X2} - {Device.GetPMICType(_currentPMICAddress)}");
+                    _pmicModelLabel.Text = $"PMIC Model: {model}";
+                    _pmicModeLabel.Text = $"PMIC Mode: {mode}";
+                    LogResponse($"PMIC at 0x{_currentPMICAddress:X2} - {model} (Mode: {mode})");
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    if (attempt == 2)   // last attempt failed
+                    {
+                        _pmicModelLabel.Text = $"PMIC Model: Read error";
+                        _pmicModeLabel.Text = $"PMIC Mode: Read error";
+                        ErrorOccurred?.Invoke(this, $"Failed to read PMIC info: {ex.Message}");
+                    }
+                    else
+                    {
+                        System.Threading.Thread.Sleep(100);
+                    }
+                }
+            }
         }
 
         #endregion
@@ -853,7 +895,9 @@ namespace UnifiedDDRSPDFlasher
 
             _currentPMICAddress = _detectedPMICAddresses[_pmicAddressCombo.SelectedIndex];
             LogResponse($"Selected PMIC: 0x{_currentPMICAddress:X2}");
-            DetectPMICInfo();
+
+            _pmicStabilizeTimer.Stop();
+            _pmicStabilizeTimer.Start();               // delay before reading info
         }
 
         private void OnReadClicked(object sender, EventArgs e)
@@ -994,6 +1038,7 @@ namespace UnifiedDDRSPDFlasher
             catch (Exception ex)
             {
                 LogResponse($"✗ Error reading register: {ex.Message}");
+                ErrorOccurred?.Invoke(this, $"Register read failed: {ex.Message}");
             }
             finally
             {
@@ -1037,6 +1082,7 @@ namespace UnifiedDDRSPDFlasher
             catch (Exception ex)
             {
                 LogResponse($"✗ Error reading register: {ex.Message}");
+                ErrorOccurred?.Invoke(this, $"Register write failed: {ex.Message}");
             }
             finally
             {
@@ -1102,6 +1148,7 @@ namespace UnifiedDDRSPDFlasher
         {
             if (Device.EnableFullAccess(_currentPMICAddress))
             {
+                DetectPMICInfo();
                 LogResponse("[INFO] Full access enabled for PMIC.");
             } else LogResponse("[INFO] Faled to enable full access for PMIC.");
             //LogResponse("[INFO] Opening advanced PMIC operations...");
@@ -1119,15 +1166,32 @@ namespace UnifiedDDRSPDFlasher
                 {
                     try
                     {
-                        _currentDump = File.ReadAllBytes(dialog.FileName);
-                        DisplayHexDump(_currentDump);
-                        _saveDumpButton.Enabled = true;
+                        byte[] loadedDump = File.ReadAllBytes(dialog.FileName);
+                        if (loadedDump.Length != 256)
+                        {
+                            string msg = $"The selected file is {loadedDump.Length} bytes, but a PMIC dump must be exactly 256 bytes.\n\n" +
+                                         "Do you still want to load it? (It may cause errors when writing.)";
+                            var result = MessageBox.Show(msg, "Invalid Dump Size", MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                            if (result != DialogResult.Yes)
+                                return;
+                        }
 
-                        LogResponse($"✓ Loaded PMIC dump: {_currentDump.Length} bytes from {dialog.FileName}");
+                        string pls_stop = "Either you don’t know what you’re doing, or you think you do—but you actually don’t.\n\n" 
+                            + "I recommend reading some datasheets first, because whatever you’re doing right now is… interesting, to say the least.\n\n"
+                            + "That said, I’m not going to let you brick your PMIC :| \n\n";
+
+                        MessageBox.Show(pls_stop, "Please stop.", MessageBoxButtons.OK, MessageBoxIcon.Error);
+
+                        //_currentDump = loadedDump;
+                        //DisplayHexDump(_currentDump);
+                        //_saveDumpButton.Enabled = true;
+
+                        //LogResponse($"✓ Loaded PMIC dump: {_currentDump.Length} bytes from {dialog.FileName}");
                     }
                     catch (Exception ex)
                     {
                         LogResponse($"✗ Failed to load file: {ex.Message}");
+                        ErrorOccurred?.Invoke(this, $"Failed to load PMIC dump: {ex.Message}");
                     }
                 }
             }
@@ -1275,6 +1339,8 @@ namespace UnifiedDDRSPDFlasher
             // Enable save button if we have dump data
             _saveDumpButton.Enabled = _currentDump != null;
         }
+
+        private System.Windows.Forms.Timer _pmicStabilizeTimer;
 
         #endregion
     }

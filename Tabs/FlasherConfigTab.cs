@@ -126,30 +126,26 @@ namespace UnifiedDDRSPDFlasher
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 3,
+                RowCount = 2, // Changed from 3 to 2
                 Padding = new Padding(3)
             };
-            rightColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 33F));
-            rightColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 33F));
-            rightColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 34F));
+            rightColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
+            rightColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
 
             // I2C Settings
             GroupBox i2cGroup = CreateI2CGroup();
             rightColumn.Controls.Add(i2cGroup, 0, 0);
 
-            // Pin Control
-            GroupBox pinGroup = CreatePinGroup();
-            rightColumn.Controls.Add(pinGroup, 0, 1);
-
             // Device Info
             GroupBox deviceGroup = CreateDeviceGroup();
-            rightColumn.Controls.Add(deviceGroup, 0, 2);
+            rightColumn.Controls.Add(deviceGroup, 0, 1);
 
             mainLayout.Controls.Add(rightColumn, 1, 0);
 
             this.Controls.Add(mainLayout);
         }
 
+        // FlasherConfigTab.cs - Remove baud rate and pin control
         private GroupBox CreateConnectionGroup()
         {
             GroupBox group = new GroupBox
@@ -163,7 +159,7 @@ namespace UnifiedDDRSPDFlasher
             TableLayoutPanel layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                RowCount = 6,
+                RowCount = 5, // Reduced rows
                 Padding = new Padding(8)
             };
 
@@ -187,29 +183,6 @@ namespace UnifiedDDRSPDFlasher
             };
             _portCombo.SelectedIndexChanged += (s, e) => PortSettingsChanged?.Invoke(this, EventArgs.Empty);
             layout.Controls.Add(_portCombo, 0, 1);
-
-            // Baud Rate
-            Label baudLabel = new Label
-            {
-                Text = "Baud Rate:",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Height = 24
-            };
-            layout.Controls.Add(baudLabel, 0, 2);
-
-            _baudRateCombo = new ComboBox
-            {
-                Dock = DockStyle.Fill,
-                DropDownStyle = ComboBoxStyle.DropDownList,
-                Font = new Font("Segoe UI", 9.5F),
-                Height = 28
-            };
-            _baudRateCombo.Items.AddRange(new object[] { "9600", "19200", "38400", "57600", "115200", "250000", "576000", "921600" });
-            _baudRateCombo.SelectedIndex = 4; // 115200
-            _baudRateCombo.SelectedIndexChanged += (s, e) => PortSettingsChanged?.Invoke(this, EventArgs.Empty);
-            layout.Controls.Add(_baudRateCombo, 0, 3);
 
             // Buttons
             TableLayoutPanel buttonLayout = new TableLayoutPanel
@@ -247,7 +220,7 @@ namespace UnifiedDDRSPDFlasher
 
             buttonLayout.Controls.Add(_refreshButton, 0, 0);
             buttonLayout.Controls.Add(_connectButton, 1, 0);
-            layout.Controls.Add(buttonLayout, 0, 4);
+            layout.Controls.Add(buttonLayout, 0, 2);
 
             // Disconnect button
             _disconnectButton = new Button
@@ -264,7 +237,7 @@ namespace UnifiedDDRSPDFlasher
             };
             _disconnectButton.FlatAppearance.BorderSize = 0;
             _disconnectButton.Click += (s, e) => DisconnectionRequested?.Invoke(this, EventArgs.Empty);
-            layout.Controls.Add(_disconnectButton, 0, 5);
+            layout.Controls.Add(_disconnectButton, 0, 3);
 
             group.Controls.Add(layout);
             return group;
@@ -341,102 +314,6 @@ namespace UnifiedDDRSPDFlasher
             _applyI2CButton.FlatAppearance.BorderSize = 0;
             _applyI2CButton.Click += OnApplyI2CClicked;
             layout.Controls.Add(_applyI2CButton, 0, 4);
-
-            group.Controls.Add(layout);
-            return group;
-        }
-
-        private GroupBox CreatePinGroup()
-        {
-            GroupBox group = new GroupBox
-            {
-                Text = "Pin Control",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                Padding = new Padding(2),
-                Enabled = false
-            };
-
-            TableLayoutPanel layout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                RowCount = 5,
-                Padding = new Padding(8)
-            };
-
-            _hvSwitchCheck = new CheckBox
-            {
-                Text = "HV_SWITCH (High Voltage)",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                Checked = false,
-                Height = 24
-            };
-            layout.Controls.Add(_hvSwitchCheck, 0, 0);
-
-            Label hvInfo = new Label
-            {
-                Text = "Controls high voltage switch for SPD programming",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 8F),
-                ForeColor = Color.Gray,
-                Height = 20
-            };
-            layout.Controls.Add(hvInfo, 0, 1);
-
-            _sa1SwitchCheck = new CheckBox
-            {
-                Text = "SA1_SWITCH",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                Checked = true,
-                Height = 24,
-                Margin = new Padding(0, 8, 0, 0)
-            };
-            layout.Controls.Add(_sa1SwitchCheck, 0, 2);
-
-            Label sa1Info = new Label
-            {
-                Text = "Controls SA1 address line switch",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 8F),
-                ForeColor = Color.Gray,
-                Height = 20
-            };
-            layout.Controls.Add(sa1Info, 0, 3);
-
-            TableLayoutPanel buttonLayout = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                ColumnCount = 2,
-                Margin = new Padding(0, 8, 0, 0)
-            };
-            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F));
-            buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 40F));
-
-            _applyPinsButton = new Button
-            {
-                Text = "Apply Pins",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                Height = 10,
-                Margin = new Padding(1)
-            };
-            _applyPinsButton.Click += OnApplyPinsClicked;
-
-            _resetPinsButton = new Button
-            {
-                Text = "Reset Pins",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                Height = 10,
-                Margin = new Padding(1)
-            };
-            _resetPinsButton.Click += OnResetPinsClicked;
-
-            buttonLayout.Controls.Add(_applyPinsButton, 0, 0);
-            buttonLayout.Controls.Add(_resetPinsButton, 1, 0);
-            layout.Controls.Add(buttonLayout, 0, 4);
 
             group.Controls.Add(layout);
             return group;
@@ -560,10 +437,8 @@ namespace UnifiedDDRSPDFlasher
             return _portCombo.SelectedItem?.ToString() ?? "";
         }
 
-        public int GetBaudRate()
-        {
-            return int.Parse(_baudRateCombo.SelectedItem?.ToString() ?? "115200");
-        }
+        // Remove baud rate method
+        public int GetBaudRate() => 115200; // Fixed baud rate for USB CDC
 
         public void RefreshPorts()
         {
@@ -582,7 +457,6 @@ namespace UnifiedDDRSPDFlasher
 
             // Connection controls
             _portCombo.Enabled = !connected;
-            _baudRateCombo.Enabled = !connected;
             _refreshButton.Enabled = !connected;
             _connectButton.Enabled = !connected;
             _disconnectButton.Enabled = connected;
@@ -600,7 +474,6 @@ namespace UnifiedDDRSPDFlasher
 
             // Other groups
             EnableGroup(_applyI2CButton.Parent.Parent as GroupBox, connected);
-            EnableGroup(_applyPinsButton.Parent.Parent.Parent as GroupBox, connected);
             EnableGroup(_setNameButton.Parent.Parent as GroupBox, connected);
         }
 
@@ -641,6 +514,7 @@ namespace UnifiedDDRSPDFlasher
             {
                 MessageBox.Show($"Error reading device info:\n\n{ex.Message}", "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ErrorOccurred?.Invoke(this, $"Device info read failed: {ex.Message}");
             }
         }
 
@@ -683,8 +557,6 @@ namespace UnifiedDDRSPDFlasher
         private void OnRefreshClicked(object sender, EventArgs e)
         {
             LoadPorts();
-            MessageBox.Show("Port list refreshed.", "Refresh Ports",
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         private void OnApplyI2CClicked(object sender, EventArgs e)
@@ -704,59 +576,14 @@ namespace UnifiedDDRSPDFlasher
                 if (Device.SetI2CClockMode(mode))
                 {
                     string speed = mode == 0 ? "100 kHz" : (mode == 1 ? "400 kHz" : "1 MHz");
-                    MessageBox.Show($"I2C clock speed set to {speed}", "Success",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
                 }
-                else
-                {
-                    MessageBox.Show("Failed to set I2C clock speed.", "Error",
-                        MessageBoxButtons.OK, MessageBoxIcon.Error);
-                }
+
             }
             catch (Exception ex)
             {
                 MessageBox.Show($"Error setting I2C clock:\n\n{ex.Message}", "Error",
                     MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void OnApplyPinsClicked(object sender, EventArgs e)
-        {
-            if (Device == null) return;
-
-            try
-            {
-                // Note: These methods need to be implemented in SPDToolDevice
-                // Device.SetPin(0, _hvSwitchCheck.Checked);  // HV_SWITCH
-                // Device.SetPin(1, _sa1SwitchCheck.Checked); // SA1_SWITCH
-
-                MessageBox.Show("Pin states applied.", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error setting pins:\n\n{ex.Message}", "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        private void OnResetPinsClicked(object sender, EventArgs e)
-        {
-            if (Device == null) return;
-
-            try
-            {
-                Device.ResetPins();
-                _hvSwitchCheck.Checked = false;
-                _sa1SwitchCheck.Checked = true;
-
-                MessageBox.Show("Pins reset to defaults.", "Success",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error resetting pins:\n\n{ex.Message}", "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                ErrorOccurred?.Invoke(this, $"Setting device clock failed: {ex.Message}");
             }
         }
 

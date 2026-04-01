@@ -353,7 +353,7 @@ namespace SPDTool
             if (response == null || response.Length == 0)
                 return string.Empty;
 
-            // Trim trailing nulls (Arduino may send full 16 bytes)
+            // Trim trailing nulls (The uC may send full 16 bytes)
             var length = Array.IndexOf(response, (byte)0);
             if (length < 0) length = response.Length;
 

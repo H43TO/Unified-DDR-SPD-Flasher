@@ -210,10 +210,10 @@ namespace UnifiedDDRSPDFlasher
                 RowCount = 4,
                 Padding = new Padding(5)
             };
-            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
-            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 25F));
+            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 17F));
+            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 17F));
+            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 17F));
+            infoLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 49F));
 
             _detectedGenLabel = new Label
             {
@@ -222,7 +222,7 @@ namespace UnifiedDDRSPDFlasher
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(3),
-                Height = 24
+                Height = 20
             };
             infoLayout.Controls.Add(_detectedGenLabel, 0, 0);
 
@@ -233,7 +233,7 @@ namespace UnifiedDDRSPDFlasher
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(3),
-                Height = 24
+                Height = 20
             };
             infoLayout.Controls.Add(_spdSizeLabel, 0, 1);
 
@@ -244,7 +244,7 @@ namespace UnifiedDDRSPDFlasher
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
                 Padding = new Padding(3),
-                Height = 24
+                Height = 20
             };
             infoLayout.Controls.Add(wpLabel, 0, 2);
 
@@ -254,7 +254,7 @@ namespace UnifiedDDRSPDFlasher
                 FlowDirection = FlowDirection.LeftToRight,
                 WrapContents = true,
                 AutoScroll = true,
-                Height = 24
+                Height = 36
             };
             infoLayout.Controls.Add(_writeProtectionPanel, 0, 3);
 
@@ -410,7 +410,6 @@ namespace UnifiedDDRSPDFlasher
                 _moduleAddressCombo.Items.Clear();
                 _detectedAddresses.Clear();
 
-                // Scan for devices
                 var devices = Device.ScanBus();
                 var spdDevices = devices.Where(a => a >= 0x50 && a <= 0x57).ToList();
 
@@ -419,6 +418,22 @@ namespace UnifiedDDRSPDFlasher
                     _moduleAddressCombo.Items.Add("No modules detected");
                     _moduleAddressCombo.SelectedIndex = 0;
                     _moduleAddressCombo.Enabled = false;
+
+                    // Clear module info
+                    _detectedGenLabel.Text = "Detected Generation: No DIMM detected";
+                    _spdSizeLabel.Text = "SPD Size: No SPD detected";
+                    _writeProtectionPanel.Controls.Clear();
+                    Label nd = new Label
+                    {
+                        Text = "No DIMM detected",
+                        Font = new Font("Segoe UI", 12F),
+                        ForeColor = Color.Gray,
+                        AutoSize = true
+                    };
+                    _writeProtectionPanel.Controls.Add(nd);
+                    _currentModuleInfo = null;
+
+                    UpdateUIState(true);   // still connected, but no module
                     return;
                 }
 
@@ -440,12 +455,13 @@ namespace UnifiedDDRSPDFlasher
 
                 _moduleAddressCombo.SelectedIndex = 0;
 
-                // Auto-detect first module
                 if (_detectedAddresses.Count > 0)
                 {
                     _currentAddress = _detectedAddresses[0];
                     DetectCurrentModule();
                 }
+
+                UpdateUIState(true);
             }
             catch (Exception ex)
             {
@@ -471,6 +487,7 @@ namespace UnifiedDDRSPDFlasher
 
             _currentAddress = _detectedAddresses[_moduleAddressCombo.SelectedIndex];
             DetectCurrentModule();
+            UpdateUIState(true);   // refresh button states after module change
         }
 
         private void DetectCurrentModule()
@@ -506,14 +523,14 @@ namespace UnifiedDDRSPDFlasher
 
             if (_currentModuleInfo?.Type != ModuleType.DDR5)
             {
-                Label na = new Label
+                Label hwwp = new Label
                 {
-                    Text = "N/A (DDR5 only)",
-                    Font = new Font("Segoe UI", 8.5F),
+                    Text = "Hardware WP gets cleared automatically",
+                    Font = new Font("Segoe UI", 12F),
                     ForeColor = Color.Gray,
                     AutoSize = true
                 };
-                _writeProtectionPanel.Controls.Add(na);
+                _writeProtectionPanel.Controls.Add(hwwp);
                 return;
             }
 
@@ -521,20 +538,21 @@ namespace UnifiedDDRSPDFlasher
             {
                 for (byte block = 0; block < 16; block++)
                 {
+                    byte capturedBlock = block; // capture the current block index
                     bool isProtected = Device.GetRSWP(_currentAddress, block);
 
                     Label blockLabel = new Label
                     {
                         Text = block.ToString(),
-                        Width = 22,
-                        Height = 22,
+                        Width = 65,
+                        Height = 65,
                         TextAlign = ContentAlignment.MiddleCenter,
                         BorderStyle = BorderStyle.FixedSingle,
                         BackColor = isProtected ? Color.LightCoral : Color.LightGreen,
-                        Font = new Font("Segoe UI", 7.5F),
+                        Font = new Font("Segoe UI", 10F),
                         Margin = new Padding(1)
                     };
-                    blockLabel.Click += (s, e) => OnWriteProtectionBlockClicked(block);
+                    blockLabel.Click += (s, e) => OnWriteProtectionBlockClicked(capturedBlock);
 
                     _writeProtectionPanel.Controls.Add(blockLabel);
                 }
@@ -544,11 +562,12 @@ namespace UnifiedDDRSPDFlasher
                 Label error = new Label
                 {
                     Text = "Read error",
-                    Font = new Font("Segoe UI", 8.5F),
+                    Font = new Font("Segoe UI", 12F),
                     ForeColor = Color.Red,
                     AutoSize = true
                 };
                 _writeProtectionPanel.Controls.Add(error);
+                ErrorOccurred?.Invoke(this, $"Failed to read write protection status: {ex.Message}");
             }
         }
 
@@ -614,8 +633,6 @@ namespace UnifiedDDRSPDFlasher
                 _verifyButton.Enabled = true;
                 _writeAllButton.Enabled = true;
 
-                MessageBox.Show($"Successfully read {_currentDump.Length} bytes from SPD.", "Read Complete",
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -854,7 +871,7 @@ namespace UnifiedDDRSPDFlasher
                     if (_currentModuleInfo?.Type == ModuleType.DDR4)
                     {
                         // DDR4 has 256-byte pages. For offsets >= 256, we need page 1
-                        // The Arduino library should handle this automatically, but we add a small delay
+                        // The library should handle this automatically, but we add a small delay
                         if (offset >= 256)
                         {
                             System.Threading.Thread.Sleep(20); // Extra delay for page switching
@@ -944,14 +961,34 @@ namespace UnifiedDDRSPDFlasher
                 {
                     try
                     {
-                        _currentDump = File.ReadAllBytes(dialog.FileName);
+                        byte[] loadedDump = File.ReadAllBytes(dialog.FileName);
+                        int loadedSize = loadedDump.Length;
+
+                        // If a module is present, check size
+                        if (_currentModuleInfo != null && _currentModuleInfo.Size > 0)
+                        {
+                            int expectedSize = _currentModuleInfo.Size;
+                            if (loadedSize != expectedSize)
+                            {
+                                string warning = $"The loaded dump is {loadedSize} bytes, but the current SPD is {expectedSize} bytes.\n\n" +
+                                                 $"Writing this dump may cause unpredictable results.\n\nDo you want to continue?";
+                                var result = MessageBox.Show(warning, "Size Mismatch Warning",
+                                                MessageBoxButtons.YesNo, MessageBoxIcon.Warning);
+                                if (result == DialogResult.No)
+                                    return;
+                            }
+                        }
+
+                        _currentDump = loadedDump;
                         DisplayHexDump(_currentDump);
                         _saveDumpButton.Enabled = true;
-                        _verifyButton.Enabled = true;
-                        _writeAllButton.Enabled = true;
 
-                        MessageBox.Show($"Loaded {_currentDump.Length} bytes", "File Loaded",
-                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        // Update verify/write buttons based on current module presence
+                        bool hasModule = _currentModuleInfo != null && _detectedAddresses.Count > 0;
+                        _verifyButton.Enabled = hasModule;
+                        _writeAllButton.Enabled = hasModule;
+
+                        ErrorOccurred?.Invoke(this, $"Loaded {loadedSize} bytes from {dialog.FileName}");
                     }
                     catch (Exception ex)
                     {
@@ -1038,9 +1075,15 @@ namespace UnifiedDDRSPDFlasher
 
         private void UpdateUIState(bool connected)
         {
-            _openDumpButton.Enabled = connected;
-            _readButton.Enabled = connected;
-            _moduleAddressCombo.Enabled = connected;
+            bool hasModule = connected && _detectedAddresses.Count > 0;
+            bool hasDump = _currentDump != null;
+
+            _openDumpButton.Enabled = hasModule;
+            _saveDumpButton.Enabled = hasDump;          // Save always available if data exists
+            _readButton.Enabled = hasModule;
+            _verifyButton.Enabled = hasModule && hasDump;
+            _writeAllButton.Enabled = hasModule && hasDump;
+            _moduleAddressCombo.Enabled = hasModule;
         }
 
         private void LogError(string message)
