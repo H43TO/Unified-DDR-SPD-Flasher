@@ -2,6 +2,7 @@
 using System.Collections.Generic;
 using System.IO.Ports;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
 
@@ -64,15 +65,15 @@ namespace SPDTool
         private const byte ALERT_CLOCK_DEC = 0x5C; // '\'
 
         // Pin identifiers (for CMD_PIN_CONTROL)
-        private const byte PIN_HV_SWITCH = 0x00;
+        private const byte PIN_HV_SWITCH = 0x00; // Controlls the opto-coupler that enables the high-voltage programming signals for DDR3/4. This gets controlled by the firmware automatically during DDR3/4 operations, but can be manually toggled for testing or custom use. If enabled, it creates a ~25ms HV pulse. Check FW source for details.
         private const byte PIN_SA1_SWITCH = 0x01;
-        private const byte PIN_DEV_STATUS = 0x02;
-        private const byte PIN_HV_CONVERTER = 0x03;
-        private const byte PIN_DDR5_VIN_CTRL = 0x04;
-        private const byte PIN_PMIC_CTRL = 0x05;
-        private const byte PIN_PMIC_FLAG = 0x06;
-        private const byte PIN_RFU1 = 0x07;
-        private const byte PIN_RFU2 = 0x08;
+        private const byte PIN_DEV_STATUS = 0x02; // Connected to an LED on the programmer board; can be used to indicate status, activity, or errors in a custom way.
+        private const byte PIN_HV_CONVERTER = 0x03; // Connected to the high‑voltage boost converter's enable pin, which used for programming DDR3/4 modules. Must be enabled for DDR3/4 WP to be disable.
+        private const byte PIN_DDR5_VIN_CTRL = 0x04; // Controlls the power supply to DDR5 modules. Must be enabled for DDR5 detection and access, otherwise the module will appear unresponsive. Does not affect DDR3/4 modules.
+        private const byte PIN_PMIC_CTRL = 0x05; // Connected the PWR_EN line of the PMICs. Enabling this pin makes all the PMIC phases active, regardless of the PMIC's voltage regulator register settings. Refer to the datasheet/JEDEC spec for more info.
+        private const byte PIN_PMIC_FLAG = 0x06; // Connected to the PMIC's PGOOD pin. Refer to the datasheet/JEDEC spec for more info.
+        private const byte PIN_RFU1 = 0x07; // Reserved for future use; currently has no function. 
+        private const byte PIN_RFU2 = 0x08; // Reserved for future use; currently has no function. 
 
         // SPD5 hub registers
         public const byte MR0 = 0x00;
@@ -146,7 +147,7 @@ namespace SPDTool
             _serialPort.Open();
 
             // Allow the RP2040 to boot and initialise
-            Thread.Sleep(2000);
+            Thread.Sleep(2500);
 
             _serialPort.DiscardInBuffer();
             _serialPort.DiscardOutBuffer();
@@ -888,6 +889,8 @@ namespace SPDTool
         /// <summary>Identifies the PMIC type (e.g., "PMIC5100", "PMIC5000") based on registers.</summary>
         public string GetPMICType(byte pmicAddress)
         {
+
+
             var reg3B = ReadPMICDevice(pmicAddress, 0x3B);
             var reg23 = ReadPMICDevice(pmicAddress, 0x23);
 
@@ -910,6 +913,7 @@ namespace SPDTool
             };
         }
 
+        /// Helper to distinguish PMIC5000 vs PMIC5200 based on a specific register bit.
         private bool IsPMIC5200(byte pmicAddress)
         {
             var reg3E = ReadPMICDevice(pmicAddress, 0x3E);
@@ -928,8 +932,8 @@ namespace SPDTool
 
                 var isProgrammable = (reg2F[0] & 0x04) != 0; // bit 2
 
-                var reg45 = ReadPMICDevice(pmicAddress, 0x45);
-                var vendorUnlocked = reg45 != null && reg45.Length > 0 && reg45[0] != 0;
+                var stat = ReadPMICDevice(pmicAddress, 0x45);
+                var vendorUnlocked = stat != null && stat.Length > 0 && stat[0] != 0;
 
                 return vendorUnlocked ? "Manufacturer Access"
                      : isProgrammable ? "Programmable"
@@ -939,6 +943,41 @@ namespace SPDTool
             {
                 return "ERROR";
             }
+        }
+
+        public bool RebootDIMM()
+        {
+            try
+            {
+                if (SetPin(PIN_DDR5_VIN_CTRL, CMD_GET) != true) SetPin(PIN_DDR5_VIN_CTRL, CMD_ENABLE);
+
+                SetPin(PIN_DDR5_VIN_CTRL, CMD_DISABLE);
+                Thread.Sleep(500);
+                SetPin(PIN_DDR5_VIN_CTRL, CMD_ENABLE);
+
+                return SetPin(PIN_DDR5_VIN_CTRL, CMD_GET);
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        //TODO: implement PMIC vendor block programing as per JEDEC standard for PMIC5010/5100/5200(and other) pmics. We should write to the specific registers, then send the burn command to 0x39, then read 0x39 to confirm success. 
+        //Registers below 0x40 are volatile and are configured by vendor bytes starting from reg 0x40. There registers are MTP(multiple time programable), so no need to worry about bricking.
+        //The spacific values, that we wanna burn should be read from the current, loaded dump.
+        public bool BurnBlock(byte pmicAddress, int blockNumber) 
+        {
+            // block number 0 should represent writing the whole vendor block
+            // block number 99 should represent writing ALL of the registers(all 256), not just the vendor blocks
+
+            return false;
+        }
+
+        //TODO: Implement based on JEDEC PMIC standard(PMIC5100), regarding Power Good register and pin config
+        public string GetPMICPGoodStatus(byte pmicAddress)
+        {
+            return "to be implemented";
         }
 
         /// <summary>Container for a full set of PMIC measurements.</summary>

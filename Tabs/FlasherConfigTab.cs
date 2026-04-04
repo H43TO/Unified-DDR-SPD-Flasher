@@ -7,10 +7,17 @@ using SPDTool;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// Flasher Configuration Tab v2.3 - Added 1MHz I2C support
+    /// Flasher Configuration Tab 
+    /// version - 2.4 - refactored code
     /// </summary>
     public class FlasherConfigTab : UserControl
     {
+        #region Constants
+
+        private const int DEFAULT_BAUD_RATE = 115200;
+
+        #endregion
+
         #region Events
 
         public event EventHandler ConnectionRequested;
@@ -40,7 +47,7 @@ namespace UnifiedDDRSPDFlasher
         // I2C Settings
         private RadioButton _i2c100Radio;
         private RadioButton _i2c400Radio;
-        private RadioButton _i2c1MRadio;          // NEW: 1 MHz
+        private RadioButton _i2c1MRadio;
         private Button _applyI2CButton;
 
         // Device Info
@@ -126,7 +133,7 @@ namespace UnifiedDDRSPDFlasher
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 1,
-                RowCount = 2, // Changed from 3 to 2
+                RowCount = 2,
                 Padding = new Padding(3)
             };
             rightColumn.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
@@ -145,7 +152,6 @@ namespace UnifiedDDRSPDFlasher
             this.Controls.Add(mainLayout);
         }
 
-        // FlasherConfigTab.cs - Remove baud rate and pin control
         private GroupBox CreateConnectionGroup()
         {
             GroupBox group = new GroupBox
@@ -159,7 +165,7 @@ namespace UnifiedDDRSPDFlasher
             TableLayoutPanel layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                RowCount = 5, // Reduced rows
+                RowCount = 5,
                 Padding = new Padding(8)
             };
 
@@ -257,7 +263,7 @@ namespace UnifiedDDRSPDFlasher
             TableLayoutPanel layout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                RowCount = 5,                     // Now 5 rows: label, 100k, 400k, 1M, button
+                RowCount = 5,
                 Padding = new Padding(8)
             };
 
@@ -290,7 +296,6 @@ namespace UnifiedDDRSPDFlasher
             };
             layout.Controls.Add(_i2c400Radio, 0, 2);
 
-            // NEW: 1 MHz option
             _i2c1MRadio = new RadioButton
             {
                 Text = "1 MHz (Fast-Plus)",
@@ -437,8 +442,7 @@ namespace UnifiedDDRSPDFlasher
             return _portCombo.SelectedItem?.ToString() ?? "";
         }
 
-        // Remove baud rate method
-        public int GetBaudRate() => 115200; // Fixed baud rate for USB CDC
+        public int GetBaudRate() => DEFAULT_BAUD_RATE;
 
         public void RefreshPorts()
         {

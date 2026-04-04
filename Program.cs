@@ -4,7 +4,7 @@ using System.Windows.Forms;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// Main program entry point for Unified DDR SPD Flasher v2.0
+    /// Main program entry point for Unified DDR SPD Flasher
     /// </summary>
     static class Program
     {

@@ -7,11 +7,20 @@ using System.Windows.Forms;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// Main form for the Unified DDR SPD Flasher v2.2
-    /// Fixed all connection and display issues
+    /// Main form for the Unified DDR SPD Flasher
     /// </summary>
     public class MainForm : Form
     {
+        #region Constants
+
+        private const string APP_VERSION = "v2.6";
+        private const int BUS_MONITOR_INTERVAL_MS = 500;
+        private const int DISCONNECT_CHECK_INTERVAL_MS = 2000;
+        private const int CONNECT_PING_RETRIES = 5;
+        private const int BAUD_RATE = 115200;
+
+        #endregion
+
         #region Private Fields
 
         private SPDToolDevice _spdDevice;
@@ -22,22 +31,21 @@ namespace UnifiedDDRSPDFlasher
         private PMICOperationsTab _pmicTab;
         private FlasherConfigTab _configTab;
 
-        // Bottom status bar - FIXED: Added connection label reference
+        // Bottom status bar
         private Panel _statusBar;
         private Label _errorLabel;
         private Panel _connectionIndicator;
         private Label _comPortLabel;
-        private Label _connectionStatusLabel; // NEW: Reference to connection status label
+        private Label _connectionStatusLabel;
 
         // Connection state
         private bool _isConnected = false;
         private string _currentPort = "";
         private int _errorCount = 0;
 
-        // Auto-detection timer
+        // Timers
         private System.Windows.Forms.Timer _busMonitorTimer;
-        private System.Windows.Forms.Timer _disconnectCheckTimer; // New timer
-
+        private System.Windows.Forms.Timer _disconnectCheckTimer;
 
         #endregion
 
@@ -57,7 +65,7 @@ namespace UnifiedDDRSPDFlasher
         private void InitializeCustomComponents()
         {
             // Set form properties
-            this.Text = "Unified DDR SPD Flasher v2.2";
+            this.Text = $"Unified DDR SPD Flasher {APP_VERSION}";
             this.Size = new Size(1500, 900);
             this.FormBorderStyle = FormBorderStyle.FixedSingle;
             this.MaximizeBox = false;
@@ -114,11 +122,11 @@ namespace UnifiedDDRSPDFlasher
 
             // Setup bus monitoring timer for auto-detection
             _busMonitorTimer = new System.Windows.Forms.Timer();
-            _busMonitorTimer.Interval = 500; // Check every 0.5 seconds
+            _busMonitorTimer.Interval = BUS_MONITOR_INTERVAL_MS;
             _busMonitorTimer.Tick += OnBusMonitorTick;
 
             _disconnectCheckTimer = new System.Windows.Forms.Timer();
-            _disconnectCheckTimer.Interval = 2000; // Check every 2 seconds
+            _disconnectCheckTimer.Interval = DISCONNECT_CHECK_INTERVAL_MS;
             _disconnectCheckTimer.Tick += OnDisconnectCheckTick;
         }
 
@@ -172,7 +180,7 @@ namespace UnifiedDDRSPDFlasher
                 Margin = new Padding(8, 6, 0, 0)
             };
 
-            // Connection status label - STORE REFERENCE
+            // Connection status label
             _connectionStatusLabel = new Label
             {
                 Text = "Disconnected",
@@ -217,25 +225,23 @@ namespace UnifiedDDRSPDFlasher
             try
             {
                 string portName = _configTab.GetSelectedPort();
-                const int baudRate = 115200;
 
                 if (string.IsNullOrEmpty(portName) || portName == "No ports available")
                 {
                     LogError("Please select a valid COM port first.");
                     MessageBox.Show("Please select a valid COM port first.", "Connection Error",
                         MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                    //_configTab.LogError($"Connection failed: {e.Message}");
                     return;
                 }
 
-                LogMessage($"Attempting connection to {portName} at {baudRate} baud...");
+                LogMessage($"Attempting connection to {portName} at {BAUD_RATE} baud...");
 
                 // Create device connection
-                _spdDevice = new SPDToolDevice(portName, baudRate);
+                _spdDevice = new SPDToolDevice(portName, BAUD_RATE);
 
                 // Test connection with retry
                 bool pingSuccess = false;
-                for (int attempt = 0; attempt < 5; attempt++)
+                for (int attempt = 0; attempt < CONNECT_PING_RETRIES; attempt++)
                 {
                     try
                     {
@@ -310,7 +316,7 @@ namespace UnifiedDDRSPDFlasher
         {
             try
             {
-                // Stop bus monitoring and diconnect check timers
+                // Stop bus monitoring and disconnect check timers
                 _busMonitorTimer.Stop();
                 _disconnectCheckTimer.Stop();
 
@@ -364,7 +370,6 @@ namespace UnifiedDDRSPDFlasher
                 }
             }
         }
-
 
         private void OnDeviceAlert(object sender, AlertEventArgs e)
         {
@@ -429,12 +434,10 @@ namespace UnifiedDDRSPDFlasher
                 {
                     LogError($"Bus scan error: {ex.Message}");
                     _configTab.LogError($"Bus scan error: {ex.Message}");
-                    // If device is gone, trigger disconnect
                 }
             }
         }
 
-        // FIXED: Properly updates connection status in status bar
         private void UpdateConnectionState(bool connected)
         {
             if (InvokeRequired)
@@ -449,11 +452,10 @@ namespace UnifiedDDRSPDFlasher
             _spdTab.Enabled = connected;
             _pmicTab.Enabled = connected;
 
-            // Update status bar - FIXED: Use stored reference
+            // Update status bar
             _connectionIndicator.BackColor = connected ? Color.LimeGreen : Color.Red;
             _comPortLabel.Text = connected ? $"Using COM: {_currentPort}" : "Using COM: ---";
 
-            // FIXED: Update connection status label text and color
             if (_connectionStatusLabel != null)
             {
                 _connectionStatusLabel.Text = connected ? "Connected" : "Disconnected";

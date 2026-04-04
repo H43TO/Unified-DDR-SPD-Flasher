@@ -10,11 +10,20 @@ using System.Windows.Forms;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// PMIC Operations Tab v2.3 - Fixed PMIC Reading Implementation
-    /// All issues resolved: proper PMIC detection, correct button sizing, PMIC reading implemented
+    /// PMIC Operations Tab
+    /// version 2.6 - fixed bugs
     /// </summary>
     public class PMICOperationsTab : UserControl
     {
+        #region Constants
+
+        private const int PMIC_STABILIZE_DELAY_MS = 300;
+        private const int PMIC_PROBE_RETRIES = 3;
+        private const int PMIC_READ_CHUNK_SIZE = 64;
+        private const int PMIC_RETRY_DELAY_MS = 100;
+
+        #endregion
+
         #region Events
 
         public event EventHandler<string> ErrorOccurred;
@@ -56,6 +65,8 @@ namespace UnifiedDDRSPDFlasher
         private byte _currentPMICAddress = 0x48;
         private List<byte> _detectedPMICAddresses = new List<byte>();
 
+        private System.Windows.Forms.Timer _pmicStabilizeTimer;
+
         #endregion
 
         #region Constructor
@@ -66,7 +77,7 @@ namespace UnifiedDDRSPDFlasher
             UpdateUIState(false);
 
             _pmicStabilizeTimer = new System.Windows.Forms.Timer();
-            _pmicStabilizeTimer.Interval = 300;          // 0.3 second delay
+            _pmicStabilizeTimer.Interval = PMIC_STABILIZE_DELAY_MS;
             _pmicStabilizeTimer.Tick += OnPmicStabilizeTimerTick;
         }
 
@@ -144,7 +155,7 @@ namespace UnifiedDDRSPDFlasher
                 Dock = DockStyle.Fill,
                 RowCount = 2
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F)); // Reduced height
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
             // Buttons - Smaller size
@@ -153,13 +164,13 @@ namespace UnifiedDDRSPDFlasher
                 Dock = DockStyle.Fill,
                 FlowDirection = FlowDirection.LeftToRight,
                 Padding = new Padding(0, 2, 0, 2),
-                Height = 28 // Smaller height
+                Height = 28
             };
 
             _openDumpButton = new Button
             {
                 Text = "Open Dump",
-                Size = new Size(300, 30), // Smaller buttons
+                Size = new Size(300, 30),
                 Font = new Font("Segoe UI", 10F),
                 Margin = new Padding(0, 0, 5, 0),
                 Enabled = false
@@ -169,7 +180,7 @@ namespace UnifiedDDRSPDFlasher
             _saveDumpButton = new Button
             {
                 Text = "Save Dump",
-                Size = new Size(300, 30), // Smaller buttons
+                Size = new Size(300, 30),
                 Font = new Font("Segoe UI", 10F),
                 Margin = new Padding(0, 0, 0, 0),
                 Enabled = false
@@ -238,7 +249,6 @@ namespace UnifiedDDRSPDFlasher
                 Padding = new Padding(6)
             };
 
-            // New 2x2 grid layout
             TableLayoutPanel regLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -251,7 +261,7 @@ namespace UnifiedDDRSPDFlasher
             regLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             regLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
 
-            // Row 0, Column 0: Address label + field
+            // Address panel
             FlowLayoutPanel addressPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -276,7 +286,7 @@ namespace UnifiedDDRSPDFlasher
             addressPanel.Controls.Add(addressLabel);
             addressPanel.Controls.Add(_regAddressText);
 
-            // Row 0, Column 1: Value label + field
+            // Value panel
             FlowLayoutPanel valuePanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -301,7 +311,7 @@ namespace UnifiedDDRSPDFlasher
             valuePanel.Controls.Add(valueLabel);
             valuePanel.Controls.Add(_regValueText);
 
-            // Row 1, Column 0: Read button
+            // Read button
             _readRegButton = new Button
             {
                 Text = "Read",
@@ -313,7 +323,7 @@ namespace UnifiedDDRSPDFlasher
             };
             _readRegButton.Click += OnReadRegClicked;
 
-            // Row 1, Column 1: Write button
+            // Write button
             _writeRegButton = new Button
             {
                 Text = "Write",
@@ -334,7 +344,7 @@ namespace UnifiedDDRSPDFlasher
             singleRegGroup.Controls.Add(regLayout);
             layout.Controls.Add(singleRegGroup, 0, 0);
 
-            // Right: Action buttons (unchanged)
+            // Right: Action buttons
             TableLayoutPanel actionLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -345,13 +355,12 @@ namespace UnifiedDDRSPDFlasher
             actionLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 33F));
             actionLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 34F));
 
-
             _toggleVregButton = new Button
             {
-                Text = "Toggle VReg",
+                Text = "Get Voltages", //TODO: Change to "Toggle VREG" when implemented
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 8F),
-                Height = 22, // Smaller
+                Height = 22,
                 Margin = new Padding(1),
                 Enabled = false
             };
@@ -362,7 +371,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Reboot DIMM",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 8F),
-                Height = 22, // Smaller
+                Height = 22,
                 Margin = new Padding(1),
                 Enabled = false
             };
@@ -373,7 +382,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Advanced",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 8F),
-                Height = 22, // Smaller
+                Height = 22,
                 Margin = new Padding(1),
                 Enabled = false
             };
@@ -429,7 +438,7 @@ namespace UnifiedDDRSPDFlasher
             addressPanel.Controls.Add(addressLabel);
             layout.Controls.Add(addressPanel, 0, 0);
 
-            // 2. PMIC Info - PLACEHOLDER (to be implemented)
+            // 2. PMIC Info
             GroupBox pmicInfoGroup = CreatePMICInfoPlaceholder();
             layout.Controls.Add(pmicInfoGroup, 0, 1);
 
@@ -459,7 +468,7 @@ namespace UnifiedDDRSPDFlasher
                 BackColor = Color.FromArgb(0, 120, 215),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Height = 32, // Smaller
+                Height = 32,
                 Margin = new Padding(3),
                 Enabled = false
             };
@@ -474,7 +483,7 @@ namespace UnifiedDDRSPDFlasher
                 BackColor = Color.FromArgb(232, 17, 35),
                 ForeColor = Color.White,
                 FlatStyle = FlatStyle.Flat,
-                Height = 32, // Smaller
+                Height = 32,
                 Margin = new Padding(3),
                 Enabled = false
             };
@@ -511,7 +520,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Burn block 0x40-0x4F",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 8.5F),
-                Height = 28, // Smaller
+                Height = 28,
                 Margin = new Padding(2),
                 Enabled = false
             };
@@ -522,7 +531,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Burn block 0x50-0x5F",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 8.5F),
-                Height = 28, // Smaller
+                Height = 28,
                 Margin = new Padding(2),
                 Enabled = false
             };
@@ -533,7 +542,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Burn block 0x60-0x6F",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 8.5F),
-                Height = 28, // Smaller
+                Height = 28,
                 Margin = new Padding(2),
                 Enabled = false
             };
@@ -573,7 +582,7 @@ namespace UnifiedDDRSPDFlasher
 
             _pmicModelLabel = new Label
             {
-                Text = "PMIC Model: ",
+                Text = "PMIC Model: No PMIC detected",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -584,7 +593,7 @@ namespace UnifiedDDRSPDFlasher
 
             _pmicModeLabel = new Label
             {
-                Text = "PMIC Mode: Not implemented",
+                Text = "PMIC Mode: No PMIC detected",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -595,7 +604,7 @@ namespace UnifiedDDRSPDFlasher
 
             _outputStatusLabel = new Label
             {
-                Text = "Output Status: Not implemented",
+                Text = "Output Status: No PMIC detected",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -606,7 +615,7 @@ namespace UnifiedDDRSPDFlasher
 
             _powerGoodLabel = new Label
             {
-                Text = "Power Good: Not implemented",
+                Text = "Power Good: No PMIC detected",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9F),
                 TextAlign = ContentAlignment.MiddleLeft,
@@ -623,7 +632,7 @@ namespace UnifiedDDRSPDFlasher
 
         #region Public Methods
 
-        public void LogResponse(string message)
+        public void LogResponse(string message, string color = "Info")
         {
             if (InvokeRequired)
             {
@@ -632,6 +641,12 @@ namespace UnifiedDDRSPDFlasher
             }
 
             string timestamp = DateTime.Now.ToString("HH:mm:ss");
+            _responseLog.SelectionColor = color switch
+            {
+                "Err" => Color.DarkRed,
+                "Warn" => Color.OrangeRed,
+                _ => Color.Black
+            };
             _responseLog.AppendText($"[{timestamp}] {message}\n");
             _responseLog.ScrollToCaret();
         }
@@ -662,7 +677,7 @@ namespace UnifiedDDRSPDFlasher
                 return;
             }
 
-            _pmicStabilizeTimer.Stop();               // <-- stop any pending timer
+            _pmicStabilizeTimer.Stop();
 
             _pmicAddressCombo.Items.Clear();
             _pmicModelLabel.Text = "PMIC Model: Not implemented";
@@ -722,17 +737,15 @@ namespace UnifiedDDRSPDFlasher
                     _currentPMICAddress = _detectedPMICAddresses[0];
                     _pmicAddressCombo.SelectedIndex = 0;
                     _pmicStabilizeTimer.Stop();
-                    _pmicStabilizeTimer.Start();           // delay before reading info
+                    _pmicStabilizeTimer.Start();
                 }
                 else if (_detectedPMICAddresses.Count == 0)
                 {
                     _currentPMICAddress = 0;
-                    // Clear labels
                     OnDeviceDisconnected();
                 }
                 else if (newPmicDetected)
                 {
-                    // New PMIC added but current address unchanged -> re‑read info after delay
                     _pmicStabilizeTimer.Stop();
                     _pmicStabilizeTimer.Start();
                 }
@@ -750,7 +763,7 @@ namespace UnifiedDDRSPDFlasher
             _pmicStabilizeTimer.Stop();
             if (_detectedPMICAddresses.Count > 0 && _currentPMICAddress != 0)
             {
-                DetectPMICInfo();          // now includes retries
+                DetectPMICInfo();
             }
         }
 
@@ -767,12 +780,12 @@ namespace UnifiedDDRSPDFlasher
 
                 LogResponse("Scanning for PMIC devices (0x48-0x4F)...");
 
-                for (int attempt = 1; attempt <= 3; attempt++)
+                for (int attempt = 1; attempt <= PMIC_PROBE_RETRIES; attempt++)
                 {
                     if (attempt > 1)
                     {
                         LogResponse($"Attempt {attempt}...");
-                        Thread.Sleep(300); // retry delay
+                        Thread.Sleep(PMIC_RETRY_DELAY_MS * 3);
                     }
 
                     for (byte addr = 0x48; addr <= 0x4F; addr++)
@@ -803,7 +816,7 @@ namespace UnifiedDDRSPDFlasher
                     _pmicAddressCombo.SelectedIndex = 0;
                     _pmicAddressCombo.Enabled = false;
                     LogResponse("No PMIC devices found.");
-                    UpdateUIState(true);      // still connected, but no PMIC
+                    UpdateUIState(true);
                     return;
                 }
 
@@ -848,18 +861,21 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
+
+        // Power-good and output should be implemented in this function when the underlying functions are implemented.
         private void DetectPMICInfo()
         {
             if (Device == null) return;
 
             // Retry up to 3 times with 100ms delays
-            for (int attempt = 0; attempt < 3; attempt++)
+            for (int attempt = 0; attempt < PMIC_PROBE_RETRIES; attempt++)
             {
                 try
                 {
                     string model = Device.GetPMICType(_currentPMICAddress);
                     string mode = Device.GetPMICMode(_currentPMICAddress);
-
+                    string outputStatus = "to be implemented"; //TODO: Implement using ADC values and voltage regulator status
+                    string powerGood = Device.GetPMICPGoodStatus(_currentPMICAddress); //TODO: Implement using the function in the library
                     _pmicModelLabel.Text = $"PMIC Model: {model}";
                     _pmicModeLabel.Text = $"PMIC Mode: {mode}";
                     LogResponse($"PMIC at 0x{_currentPMICAddress:X2} - {model} (Mode: {mode})");
@@ -867,7 +883,7 @@ namespace UnifiedDDRSPDFlasher
                 }
                 catch (Exception ex)
                 {
-                    if (attempt == 2)   // last attempt failed
+                    if (attempt == PMIC_PROBE_RETRIES - 1)
                     {
                         _pmicModelLabel.Text = $"PMIC Model: Read error";
                         _pmicModeLabel.Text = $"PMIC Mode: Read error";
@@ -875,7 +891,7 @@ namespace UnifiedDDRSPDFlasher
                     }
                     else
                     {
-                        System.Threading.Thread.Sleep(100);
+                        Thread.Sleep(PMIC_RETRY_DELAY_MS);
                     }
                 }
             }
@@ -897,11 +913,12 @@ namespace UnifiedDDRSPDFlasher
             LogResponse($"Selected PMIC: 0x{_currentPMICAddress:X2}");
 
             _pmicStabilizeTimer.Stop();
-            _pmicStabilizeTimer.Start();               // delay before reading info
+            _pmicStabilizeTimer.Start();
         }
 
         private void OnReadClicked(object sender, EventArgs e)
         {
+
             if (Device == null || _detectedPMICAddresses.Count == 0)
             {
                 LogResponse("✗ Error: No device or PMIC selected");
@@ -910,10 +927,11 @@ namespace UnifiedDDRSPDFlasher
 
             try
             {
+                DetectPMICInfo();
+
                 Cursor = Cursors.WaitCursor;
                 LogResponse($"[INFO] Reading PMIC data from 0x{_currentPMICAddress:X2}...");
 
-                // Read entire PMIC (256 bytes) using the new ReadI2CDevice method
                 byte[] pmicData = ReadEntirePMIC();
 
                 if (pmicData != null && pmicData.Length > 0)
@@ -949,20 +967,18 @@ namespace UnifiedDDRSPDFlasher
             try
             {
                 // PMIC has 256 bytes (0x00-0xFF)
-                // Read in chunks of 16 bytes for reliability
-                for (ushort offset = 0; offset < 256; offset += 64)
+                // Read in chunks of PMIC_READ_CHUNK_SIZE for reliability
+                for (ushort offset = 0; offset < 256; offset += PMIC_READ_CHUNK_SIZE)
                 {
-                    byte chunkSize = (byte)Math.Min(64, 256 - offset);
+                    byte chunkSize = (byte)Math.Min(PMIC_READ_CHUNK_SIZE, 256 - offset);
 
                     try
                     {
-                        // Use the new ReadI2CDevice method for PMIC
                         byte[] chunk = Device.ReadI2CDevice(_currentPMICAddress, offset, chunkSize);
 
                         if (chunk == null || chunk.Length != chunkSize)
                         {
                             LogResponse($"✗ Failed to read chunk at offset 0x{offset:X2}");
-                            // Add placeholder bytes
                             for (int i = 0; i < chunkSize; i++) allData.Add(0xFF);
                         }
                         else
@@ -977,7 +993,6 @@ namespace UnifiedDDRSPDFlasher
                     catch (Exception ex)
                     {
                         LogResponse($"✗ Error at offset 0x{offset:X2}: {ex.Message}");
-                        // Fill remaining with 0xFF
                         int remaining = 256 - allData.Count;
                         for (int i = 0; i < remaining; i++) allData.Add(0xFF);
                         break;
@@ -994,7 +1009,7 @@ namespace UnifiedDDRSPDFlasher
                 else
                 {
                     LogResponse($"✗ Incomplete read: {allData.Count}/256 bytes");
-                    return allData.ToArray(); // Return partial data
+                    return allData.ToArray();
                 }
             }
             catch (Exception ex)
@@ -1019,7 +1034,6 @@ namespace UnifiedDDRSPDFlasher
 
                 Cursor = Cursors.WaitCursor;
 
-                // Read single register using the new ReadI2CDevice method
                 byte[] data = Device.ReadPMICDevice(_currentPMICAddress, regAddress);
 
                 if (data != null && data.Length == 1)
@@ -1062,10 +1076,9 @@ namespace UnifiedDDRSPDFlasher
                 LogResponse($"[INFO] Writing 0x{regValue:X2} to register 0x{regAddress:X2} on PMIC 0x{_currentPMICAddress:X2}");
                 Cursor = Cursors.WaitCursor;
 
-                // Write single register using the new WriteI2CDevice method
                 bool wData = Device.WriteI2CDevice(_currentPMICAddress, regAddress, regValue);
                 byte[] data = Device.ReadPMICDevice(_currentPMICAddress, regAddress);
-                
+
                 if (wData != false && data.Length <= 1)
                 {
                     LogResponse($"✓ Register 0x{regAddress:X2} = 0x{data[0]:X2}");
@@ -1090,48 +1103,47 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        private void OnBurnVendorClicked(object sender, EventArgs e)
+        //TODO: burning(writing, because the register are multiple-time-programable as per JEDEC standard) vendor registers should be implemented
+
+        private void OnBurnVendorClicked(object sender, EventArgs e) // Write whole vendor data block (0x40-0x6F) at once, with proper verification and error handling - waiting implementation
         {
             LogResponse("[INFO] Writing vendor data to PMIC...");
             LogResponse("⚠ PMIC vendor data write not yet implemented");
         }
 
-        private void OnBurnBlockClicked(byte startReg, byte endReg)
+        private void OnBurnBlockClicked(byte startReg, byte endReg) // Write specific vendor block (0x40-0x4F, 0x50-0x5F, 0x60-0x6F), with proper verification and error handling - waiting implementation
         {
             LogResponse($"[INFO] Writing block 0x{startReg:X2}-0x{endReg:X2} to PMIC 0x{_currentPMICAddress:X2}");
             LogResponse("⚠ PMIC block write not yet implemented");
         }
 
+        //TODO: This should be reimplemented to toggle the regulators on/off (can be done with writing 0x00 or 0x80 to reg 0x32 OR togging the PMIC_CTRL pin, refer to the datasheet for this) and not just read the voltages, also add a "read voltages" button that just reads the voltages without toggling anything or add reading voltages to the info screen, and make it update live
         private void OnToggleVregClicked(object sender, EventArgs e)
         {
             var measurements = Device.ReadAllMeasurements(_currentPMICAddress);
             if (measurements == null)
             {
-                LogResponse("[ERROR] Failed to read measurements.");
+                LogResponse("[ERROR] Failed to read measurements.", "Err");
                 return;
             }
 
-            LogResponse($"[INFO] PMIC Type: {measurements.DeviceType}");
+            if (Device.ReadPMICDevice(_currentPMICAddress, 0x32)[0] != (byte)0x80) LogResponse("[WARNING] Switching regulators are currently OFF, there should be no voltage on any of the phases!", "Warn");
 
-            // Voltages (convert mV to V)
             foreach (var kv in measurements.Voltages_mV)
             {
                 LogResponse($"[INFO] {kv.Key} voltage: {kv.Value / 1000.0:F3} V");
             }
 
-            // Currents (if any)
             foreach (var kv in measurements.Currents_mA)
             {
                 LogResponse($"[INFO] {kv.Key} current: {kv.Value:F2} mA");
             }
 
-            // Powers (if any)
             foreach (var kv in measurements.Powers_mW)
             {
                 LogResponse($"[INFO] {kv.Key} power: {kv.Value:F2} mW");
             }
 
-            // Total power (if valid)
             if (!double.IsNaN(measurements.TotalPower_mW))
             {
                 LogResponse($"[INFO] Total Power: {measurements.TotalPower_mW:F2} mW");
@@ -1141,18 +1153,30 @@ namespace UnifiedDDRSPDFlasher
         private void OnRebootDimmClicked(object sender, EventArgs e)
         {
             LogResponse("[INFO] Rebooting DIMM...");
-            LogResponse("⚠ DIMM reboot not yet implemented");
+            
+            if (Device.RebootDIMM())
+            {
+                DetectPMICInfo();
+                LogResponse("✓ DIMM reboot command sent successfully");
+            }
+            else
+            {
+                DetectPMICInfo();
+                LogResponse("✗ Failed to send DIMM reboot command", "Err");
+                ErrorOccurred?.Invoke(this, "Failed to reboot DIMM.");
+            }
+
         }
 
-        private void OnAdvancedClicked(object sender, EventArgs e)
-        {
+        //TODO: Make this actually advanced and not just "enable full access", make it open a menu with various options like "Custom PMIC vendor pass" etc. Make a separate and new button for "enable full access"
+
+        private void OnAdvancedClicked(object sender, EventArgs e) { 
             if (Device.EnableFullAccess(_currentPMICAddress))
             {
                 DetectPMICInfo();
                 LogResponse("[INFO] Full access enabled for PMIC.");
-            } else LogResponse("[INFO] Faled to enable full access for PMIC.");
-            //LogResponse("[INFO] Opening advanced PMIC operations...");
-            //LogResponse("⚠ Advanced PMIC operations not yet implemented");
+            }
+            else LogResponse("[INFO] Failed to enable full access for PMIC.");
         }
 
         private void OnOpenDumpClicked(object sender, EventArgs e)
@@ -1176,17 +1200,11 @@ namespace UnifiedDDRSPDFlasher
                                 return;
                         }
 
-                        string pls_stop = "Either you don’t know what you’re doing, or you think you do—but you actually don’t.\n\n" 
+                        string pls_stop = "Either you don’t know what you’re doing, or you think you do—but you actually don’t.\n\n"
                             + "I recommend reading some datasheets first, because whatever you’re doing right now is… interesting, to say the least.\n\n"
                             + "That said, I’m not going to let you brick your PMIC :| \n\n";
 
                         MessageBox.Show(pls_stop, "Please stop.", MessageBoxButtons.OK, MessageBoxIcon.Error);
-
-                        //_currentDump = loadedDump;
-                        //DisplayHexDump(_currentDump);
-                        //_saveDumpButton.Enabled = true;
-
-                        //LogResponse($"✓ Loaded PMIC dump: {_currentDump.Length} bytes from {dialog.FileName}");
                     }
                     catch (Exception ex)
                     {
@@ -1229,7 +1247,9 @@ namespace UnifiedDDRSPDFlasher
 
         #region Helper Methods
 
-        private void DisplayHexDump(byte[] data)
+
+        //TODO: would be nice to reimplement to make it look nicer
+        private void DisplayHexDump(byte[] data) 
         {
             if (data == null || data.Length == 0)
             {
@@ -1239,50 +1259,36 @@ namespace UnifiedDDRSPDFlasher
             }
 
             _hexViewer.Clear();
-
-            // Set default font and color for the header
             _hexViewer.SelectionFont = new Font("Consolas", 10F);
             _hexViewer.SelectionColor = Color.Black;
 
-            // Add header
             _hexViewer.AppendText("Offset(h) 00 01 02 03 04 05 06 07 08 09 0A 0B 0C 0D 0E 0F  ASCII\n");
             _hexViewer.AppendText(new string('-', 74) + "\n");
 
             for (int i = 0; i < data.Length; i += 16)
             {
-                // Write offset in black
                 _hexViewer.SelectionColor = Color.Black;
                 _hexViewer.AppendText($"{i:X8}  ");
 
                 int bytesInLine = Math.Min(16, data.Length - i);
 
-                // Write hex bytes with color coding
                 for (int j = 0; j < 16; j++)
                 {
                     if (j < bytesInLine)
                     {
                         int address = i + j;
                         byte value = data[address];
-
-                        // Determine color based on address range
-                        Color byteColor = GetAddressColor(address);
-                        _hexViewer.SelectionColor = byteColor;
-
-                        // Write the hex byte (2 characters)
+                        _hexViewer.SelectionColor = GetAddressColor(address);
                         _hexViewer.AppendText($"{value:X2}");
-
-                        // Add space after byte (in black)
                         _hexViewer.SelectionColor = Color.Black;
                         _hexViewer.AppendText(" ");
                     }
                     else
                     {
-                        // Write spaces for alignment
                         _hexViewer.AppendText("   ");
                     }
                 }
 
-                // Add ASCII representation in black
                 _hexViewer.SelectionColor = Color.Black;
                 _hexViewer.AppendText(" ");
 
@@ -1295,25 +1301,21 @@ namespace UnifiedDDRSPDFlasher
                 _hexViewer.AppendText("\n");
             }
 
-            // Ensure text is visible at the top
             _hexViewer.SelectionStart = 0;
             _hexViewer.ScrollToCaret();
         }
 
-        /// <summary>
-        /// Returns color based on address range
-        /// </summary>
         private Color GetAddressColor(int address)
         {
-            if (address <= 0x3F)      // 0x00-0x3F: Dark Blue
+            if (address <= 0x3F)
                 return Color.Blue;
-            else if (address <= 0x4F) // 0x40-0x4F: Purple
+            else if (address <= 0x4F)
                 return Color.Purple;
-            else if (address <= 0x5F) // 0x50-0x5F: Orange
+            else if (address <= 0x5F)
                 return Color.Orange;
-            else if (address <= 0x6F) // 0x60-0x6F: Red
+            else if (address <= 0x6F)
                 return Color.Red;
-            else                      // 0x70-0xFF: Black
+            else
                 return Color.Black;
         }
 
@@ -1336,11 +1338,8 @@ namespace UnifiedDDRSPDFlasher
             _regValueText.Enabled = hasPMIC;
             _pmicAddressCombo.Enabled = connected && _detectedPMICAddresses.Count > 0;
 
-            // Enable save button if we have dump data
             _saveDumpButton.Enabled = _currentDump != null;
         }
-
-        private System.Windows.Forms.Timer _pmicStabilizeTimer;
 
         #endregion
     }

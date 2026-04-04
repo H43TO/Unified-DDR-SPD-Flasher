@@ -9,11 +9,21 @@ using SPDTool;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// SPD Operations Tab v2.3 - Fixed DDR5/DDR4 Reading/Writing
-    /// All issues resolved: proper page switching, checksum handling, and UI improvements
+    /// SPD Operations Tab 
+    /// version 2.6 - refactored the code and fixed bugs related to WP
     /// </summary>
     public class SPDOperationsTab : UserControl
     {
+        #region Constants
+
+        private const int READ_RETRIES = 3;
+        private const int WRITE_RETRIES = 3;
+        private const int PAGE_SWITCH_DELAY_MS = 10;
+        private const int WRITE_DELAY_MS = 20;
+        private const int READ_CHUNK_SIZE = 32;
+
+        #endregion
+
         #region Events
 
         public event EventHandler<string> ErrorOccurred;
@@ -97,15 +107,15 @@ namespace UnifiedDDRSPDFlasher
                 Dock = DockStyle.Fill,
                 RowCount = 2
             };
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F)); // Reduced from 45F
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            // Top buttons - UNIFORM SIZE
+            // Top buttons
             TableLayoutPanel buttonLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
                 ColumnCount = 2,
-                Padding = new Padding(0, 2, 0, 2) // Reduced padding
+                Padding = new Padding(0, 2, 0, 2)
             };
             buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             buttonLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
@@ -115,7 +125,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Open Dump",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 10F),
-                Height = 30, // Reduced from 35
+                Height = 30,
                 Margin = new Padding(5),
                 Enabled = false
             };
@@ -126,7 +136,7 @@ namespace UnifiedDDRSPDFlasher
                 Text = "Save Dump",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 10F),
-                Height = 30, // Reduced from 35
+                Height = 30,
                 Margin = new Padding(5),
                 Enabled = false
             };
@@ -385,7 +395,6 @@ namespace UnifiedDDRSPDFlasher
                 return;
             }
 
-            // Filter to SPD addresses only
             var spdDevices = devices.Where(a => a >= 0x50 && a <= 0x57).ToList();
 
             if (!spdDevices.SequenceEqual(_detectedAddresses))
@@ -419,7 +428,6 @@ namespace UnifiedDDRSPDFlasher
                     _moduleAddressCombo.SelectedIndex = 0;
                     _moduleAddressCombo.Enabled = false;
 
-                    // Clear module info
                     _detectedGenLabel.Text = "Detected Generation: No DIMM detected";
                     _spdSizeLabel.Text = "SPD Size: No SPD detected";
                     _writeProtectionPanel.Controls.Clear();
@@ -433,7 +441,7 @@ namespace UnifiedDDRSPDFlasher
                     _writeProtectionPanel.Controls.Add(nd);
                     _currentModuleInfo = null;
 
-                    UpdateUIState(true);   // still connected, but no module
+                    UpdateUIState(true);
                     return;
                 }
 
@@ -487,7 +495,7 @@ namespace UnifiedDDRSPDFlasher
 
             _currentAddress = _detectedAddresses[_moduleAddressCombo.SelectedIndex];
             DetectCurrentModule();
-            UpdateUIState(true);   // refresh button states after module change
+            UpdateUIState(true);
         }
 
         private void DetectCurrentModule()
@@ -538,7 +546,7 @@ namespace UnifiedDDRSPDFlasher
             {
                 for (byte block = 0; block < 16; block++)
                 {
-                    byte capturedBlock = block; // capture the current block index
+                    byte capturedBlock = block;
                     bool isProtected = Device.GetRSWP(_currentAddress, block);
 
                     Label blockLabel = new Label
@@ -617,7 +625,6 @@ namespace UnifiedDDRSPDFlasher
                 Cursor = Cursors.WaitCursor;
                 _readButton.Enabled = false;
 
-                // Read entire SPD with proper page switching
                 _currentDump = ReadEntireSPDWithRetry(_currentAddress);
 
                 if (_currentDump == null || _currentDump.Length == 0)
@@ -632,7 +639,6 @@ namespace UnifiedDDRSPDFlasher
                 _saveDumpButton.Enabled = true;
                 _verifyButton.Enabled = true;
                 _writeAllButton.Enabled = true;
-
             }
             catch (Exception ex)
             {
@@ -647,7 +653,6 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        // FIXED: Proper DDR5 and DDR4 reading with correct page switching
         private byte[] ReadEntireSPDWithRetry(byte address)
         {
             var info = Device.DetectModule(address);
@@ -662,39 +667,32 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        // FIXED: DDR5 reading with proper page handling
         private byte[] ReadDDR5SPD(byte address, int totalSize)
         {
             List<byte> allData = new List<byte>();
 
-            // DDR5 uses 128-byte pages via MR11 register
-            int pagesNeeded = (totalSize + 127) / 128; // 1024/128 = 8 pages
+            int pagesNeeded = (totalSize + 127) / 128;
 
             for (byte page = 0; page < pagesNeeded; page++)
             {
                 try
                 {
-                    // Switch to this page via MR11 register
                     if (!Device.WriteSPD5HubRegister(address, SPDToolDevice.MR11, page))
                     {
                         throw new Exception($"Failed to set page {page} via MR11");
                     }
 
-                    // Small delay for page switching
-                    System.Threading.Thread.Sleep(10);
+                    System.Threading.Thread.Sleep(PAGE_SWITCH_DELAY_MS);
 
-                    // Read 128 bytes from this page in 32-byte chunks
-                    for (ushort offset = 0; offset < 128; offset += 32)
+                    for (ushort offset = 0; offset < 128; offset += READ_CHUNK_SIZE)
                     {
-                        // For DDR5, we need to read with the proper offset
-                        byte[] chunk = ReadWithRetry(address, (ushort)(page * 128 + offset), 32, 5);
-                        if (chunk == null || chunk.Length != 32)
+                        byte[] chunk = ReadWithRetry(address, (ushort)(page * 128 + offset), READ_CHUNK_SIZE, READ_RETRIES);
+                        if (chunk == null || chunk.Length != READ_CHUNK_SIZE)
                         {
                             throw new Exception($"Failed to read page {page} at offset 0x{offset:X2}");
                         }
                         allData.AddRange(chunk);
 
-                        // Break if we've reached total size
                         if (allData.Count >= totalSize)
                             break;
                     }
@@ -706,7 +704,6 @@ namespace UnifiedDDRSPDFlasher
                 }
             }
 
-            // Trim to exact size
             if (allData.Count > totalSize)
             {
                 allData.RemoveRange(totalSize, allData.Count - totalSize);
@@ -719,10 +716,10 @@ namespace UnifiedDDRSPDFlasher
         {
             List<byte> allData = new List<byte>();
 
-            for (ushort offset = 0; offset < size; offset += 32)
+            for (ushort offset = 0; offset < size; offset += READ_CHUNK_SIZE)
             {
-                byte chunkSize = (byte)Math.Min(32, size - offset);
-                byte[] chunk = ReadWithRetry(address, offset, chunkSize, 3);
+                byte chunkSize = (byte)Math.Min(READ_CHUNK_SIZE, size - offset);
+                byte[] chunk = ReadWithRetry(address, offset, chunkSize, READ_RETRIES);
                 if (chunk == null || chunk.Length != chunkSize)
                 {
                     throw new Exception($"Failed to read at offset 0x{offset:X2}");
@@ -733,7 +730,7 @@ namespace UnifiedDDRSPDFlasher
             return allData.ToArray();
         }
 
-        private byte[] ReadWithRetry(byte address, ushort offset, byte length, int maxRetries = 3)
+        private byte[] ReadWithRetry(byte address, ushort offset, byte length, int maxRetries)
         {
             for (int attempt = 0; attempt < maxRetries; attempt++)
             {
@@ -743,7 +740,6 @@ namespace UnifiedDDRSPDFlasher
                     if (data != null && data.Length == length)
                         return data;
 
-                    // If we got data but wrong length, wait and retry
                     System.Threading.Thread.Sleep(50 * (attempt + 1));
                 }
                 catch (Exception)
@@ -845,14 +841,13 @@ namespace UnifiedDDRSPDFlasher
                 }
                 else if (_currentModuleInfo?.Type == ModuleType.DDR4)
                 {
-                    // For DDR4, we might need to clear write protection
                     try
                     {
                         Device.ClearRSWP(_currentAddress);
                     }
                     catch
                     {
-                        // Ignore if clearing fails, might not be supported
+                        // Ignore if clearing fails
                     }
                 }
 
@@ -867,20 +862,13 @@ namespace UnifiedDDRSPDFlasher
                     byte[] chunk = new byte[chunkSize];
                     Array.Copy(_currentDump, offset, chunk, 0, chunkSize);
 
-                    // FIXED: For DDR4, make sure we're writing within proper boundaries
-                    if (_currentModuleInfo?.Type == ModuleType.DDR4)
+                    if (_currentModuleInfo?.Type == ModuleType.DDR4 && offset >= 256)
                     {
-                        // DDR4 has 256-byte pages. For offsets >= 256, we need page 1
-                        // The library should handle this automatically, but we add a small delay
-                        if (offset >= 256)
-                        {
-                            System.Threading.Thread.Sleep(20); // Extra delay for page switching
-                        }
+                        System.Threading.Thread.Sleep(20);
                     }
 
-                    // Try to write with retry
                     bool writeSuccess = false;
-                    for (int retry = 0; retry < 3; retry++)
+                    for (int retry = 0; retry < WRITE_RETRIES; retry++)
                     {
                         try
                         {
@@ -899,7 +887,6 @@ namespace UnifiedDDRSPDFlasher
                         errors++;
                         ErrorOccurred?.Invoke(this, $"Write failed at offset 0x{offset:X3}");
 
-                        // Try single byte write as fallback
                         bool byteSuccess = false;
                         for (int i = 0; i < chunkSize && !byteSuccess; i++)
                         {
@@ -921,8 +908,7 @@ namespace UnifiedDDRSPDFlasher
                     _writeAllButton.Text = $"Writing... {bytesWritten}/{totalBytes}";
                     Application.DoEvents();
 
-                    // Small delay between writes
-                    System.Threading.Thread.Sleep(20);
+                    System.Threading.Thread.Sleep(WRITE_DELAY_MS);
                 }
 
                 if (errors == 0)
@@ -964,7 +950,6 @@ namespace UnifiedDDRSPDFlasher
                         byte[] loadedDump = File.ReadAllBytes(dialog.FileName);
                         int loadedSize = loadedDump.Length;
 
-                        // If a module is present, check size
                         if (_currentModuleInfo != null && _currentModuleInfo.Size > 0)
                         {
                             int expectedSize = _currentModuleInfo.Size;
@@ -983,7 +968,6 @@ namespace UnifiedDDRSPDFlasher
                         DisplayHexDump(_currentDump);
                         _saveDumpButton.Enabled = true;
 
-                        // Update verify/write buttons based on current module presence
                         bool hasModule = _currentModuleInfo != null && _detectedAddresses.Count > 0;
                         _verifyButton.Enabled = hasModule;
                         _writeAllButton.Enabled = hasModule;
@@ -1031,6 +1015,7 @@ namespace UnifiedDDRSPDFlasher
 
         #region Helper Methods
 
+        //TODO: would be nice to reimplement to make it look nicer
         private void DisplayHexDump(byte[] data)
         {
             if (data == null || data.Length == 0)
@@ -1079,7 +1064,7 @@ namespace UnifiedDDRSPDFlasher
             bool hasDump = _currentDump != null;
 
             _openDumpButton.Enabled = hasModule;
-            _saveDumpButton.Enabled = hasDump;          // Save always available if data exists
+            _saveDumpButton.Enabled = hasDump;
             _readButton.Enabled = hasModule;
             _verifyButton.Enabled = hasModule && hasDump;
             _writeAllButton.Enabled = hasModule && hasDump;
