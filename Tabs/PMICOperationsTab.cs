@@ -1,7 +1,5 @@
-﻿// ADDED: Full implementation of BurnBlock-driven vendor write, Toggle Regulators,
-//        Advanced dialog (password change, enable programmable mode, PWR_GOOD control),
-//        Unlock/Lock Vendor Region buttons, improved hex display with alternate row colours,
-//        and "Read Measurements" button separated from the legacy voltage toggle.
+﻿// UPDATED: v3.1 – Refactored to use high‑level PMIC helper methods from SPDToolLibrary.
+
 using Newtonsoft.Json;
 using SPDTool;
 using System;
@@ -16,7 +14,7 @@ using System.Windows.Forms;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// PMIC Operations Tab – version 3.0
+    /// PMIC Operations Tab – version 3.1
     /// Implements: full vendor-block MTP burning, advanced PMIC dialog,
     /// VR toggle, unlock/lock, improved hex display.
     /// </summary>
@@ -68,7 +66,7 @@ namespace UnifiedDDRSPDFlasher
         private TextBox _regValueText;
         private Button _readRegButton;
         private Button _writeRegButton;
-        private Button _readMeasButton;   // ADDED: dedicated measurement button
+        private Button _readMeasButton;
         private Button _toggleVregButton;
         private Button _rebootDimmButton;
         private Button _advancedButton;
@@ -84,8 +82,8 @@ namespace UnifiedDDRSPDFlasher
         private Button _burn40Button;
         private Button _burn50Button;
         private Button _burn60Button;
-        private Button _unlockButton;   // ADDED
-        private Button _lockButton;     // ADDED
+        private Button _unlockButton;
+        private Button _lockButton;
 
         // Data
         private byte[] _currentDump;
@@ -169,7 +167,6 @@ namespace UnifiedDDRSPDFlasher
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            // Toolbar
             FlowLayoutPanel buttonPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -190,7 +187,6 @@ namespace UnifiedDDRSPDFlasher
             buttonPanel.Controls.Add(_saveDumpButton);
             layout.Controls.Add(buttonPanel, 0, 0);
 
-            // Hex viewer – monospaced, alternating row colours drawn in paint event
             _hexViewer = new RichTextBox
             {
                 Dock = DockStyle.Fill,
@@ -223,7 +219,7 @@ namespace UnifiedDDRSPDFlasher
             _responseLog = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas",11F),
+                Font = new Font("Consolas", 11F),
                 ReadOnly = true,
                 BackColor = Color.FromArgb(248, 248, 248),
                 BorderStyle = BorderStyle.FixedSingle,
@@ -249,7 +245,6 @@ namespace UnifiedDDRSPDFlasher
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 65F));
             layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 35F));
 
-            // ── Single-register R/W ──────────────────────────────────────────────
             GroupBox singleRegGroup = new GroupBox
             {
                 Text = "Read / Write Register",
@@ -294,7 +289,6 @@ namespace UnifiedDDRSPDFlasher
             singleRegGroup.Controls.Add(regLayout);
             layout.Controls.Add(singleRegGroup, 0, 0);
 
-            // ── Action buttons ───────────────────────────────────────────────────
             TableLayoutPanel actionLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -366,7 +360,6 @@ namespace UnifiedDDRSPDFlasher
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 30F));
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 30F));
 
-            // PMIC address selector
             Panel addressPanel = new Panel { Dock = DockStyle.Fill };
             Label addressLabel = new Label
             {
@@ -388,13 +381,8 @@ namespace UnifiedDDRSPDFlasher
             addressPanel.Controls.Add(addressLabel);
             layout.Controls.Add(addressPanel, 0, 0);
 
-            // PMIC Info
             layout.Controls.Add(CreatePMICInfoGroup(), 0, 1);
-
-            // PMIC Data
             layout.Controls.Add(CreatePMICDataGroup(), 0, 2);
-
-            // PMIC Block Data
             layout.Controls.Add(CreateBlockDataGroup(), 0, 3);
 
             panel.Controls.Add(layout);
@@ -566,7 +554,6 @@ namespace UnifiedDDRSPDFlasher
                 "Warn" => Color.OrangeRed,
                 _ => Color.Black
             };
-            // Light-red background for errors
             if (level == "Err")
                 _responseLog.SelectionBackColor = Color.FromArgb(255, 240, 240);
             else
@@ -772,8 +759,6 @@ namespace UnifiedDDRSPDFlasher
                     string model = Device.GetPMICType(_currentPMICAddress);
                     string mode = Device.GetPMICMode(_currentPMICAddress);
                     string pgood = Device.GetPMICPGoodStatus(_currentPMICAddress);
-
-                    // Build output-status string from measurements
                     string outputStatus = BuildOutputStatus();
 
                     _pmicModelLabel.Text = $"PMIC Model: {model}";
@@ -781,7 +766,6 @@ namespace UnifiedDDRSPDFlasher
                     _outputStatusLabel.Text = $"Output: {outputStatus}";
                     _powerGoodLabel.Text = $"PWR_GOOD: {pgood}";
 
-                    // Colour-code the power-good label
                     _powerGoodLabel.ForeColor = pgood.Contains("All rails good")
                         ? Color.DarkGreen : Color.DarkRed;
 
@@ -804,15 +788,11 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        /// <summary>Summarises switching-regulator status from register 0x32 for the info panel.</summary>
         private string BuildOutputStatus()
         {
             try
             {
-                var r32 = Device.ReadPMICDevice(_currentPMICAddress, 0x32);
-                if (r32 == null || r32.Length == 0) return "Unknown";
-
-                bool vrEnabled = (r32[0] & 0x80) != 0; // bit 7
+                bool vrEnabled = Device.GetVRegEnabled(_currentPMICAddress);
                 return vrEnabled ? "Regulators ON" : "Regulators OFF";
             }
             catch { return "Unknown"; }
@@ -954,16 +934,27 @@ namespace UnifiedDDRSPDFlasher
                 Cursor = Cursors.WaitCursor;
                 bool ok = Device.WriteI2CDevice(_currentPMICAddress, regAddress, regValue);
 
-                // Read back to confirm
-                Thread.Sleep(200); // some delay to make sure the device can keep up
+                Thread.Sleep(200);
                 byte[] verify = Device.ReadPMICDevice(_currentPMICAddress, regAddress);
                 string readBack = (verify != null && verify.Length > 0)
                     ? $"(read-back: 0x{verify[0]:X2})" : "(read-back failed)";
 
                 if (ok)
+                {
                     LogResponse($"✓ Wrote 0x{regValue:X2} → reg 0x{regAddress:X2} {readBack}");
+
+                    // Update the loaded dump and hex viewer
+                    if (_currentDump != null && regAddress < _currentDump.Length)
+                    {
+                        _currentDump[regAddress] = verify[0];
+                        DisplayHexDump(_currentDump);
+                        _saveDumpButton.Enabled = true;
+                    }
+                }
                 else
+                {
                     LogResponse($"✗ Write failed for reg 0x{regAddress:X2}", "Err");
+                }
             }
             catch (FormatException)
             {
@@ -977,7 +968,6 @@ namespace UnifiedDDRSPDFlasher
             finally { Cursor = Cursors.Default; }
         }
 
-        // ADDED: Dedicated measurement reader (does not toggle VR)
         private void OnReadMeasClicked(object sender, EventArgs e)
         {
             if (Device == null || _currentPMICAddress == 0)
@@ -987,9 +977,9 @@ namespace UnifiedDDRSPDFlasher
             }
             try
             {
-                if(Device.GetPMICMode(_currentPMICAddress) == "Locked" && Device.ReadPMICDevice(_currentPMICAddress, 0x32)[0] == 0x00)
+                if (Device.GetPMICMode(_currentPMICAddress) == "Locked" && !Device.GetVRegEnabled(_currentPMICAddress))
                 {
-                    LogResponse("❕ Please enable the regulators first or unlock the device! ", "Warn");
+                    LogResponse("❕ Please enable the regulators first or unlock the device!", "Warn");
                     return;
                 }
                 Cursor = Cursors.WaitCursor;
@@ -1023,41 +1013,21 @@ namespace UnifiedDDRSPDFlasher
             finally { Cursor = Cursors.Default; }
         }
 
-        // ADDED: Toggle regulators without reading voltages
         private void OnToggleVregClicked(object sender, EventArgs e)
         {
             if (Device == null || _currentPMICAddress == 0) return;
             try
             {
                 Cursor = Cursors.WaitCursor;
-                var r32 = Device.ReadPMICDevice(_currentPMICAddress, 0x32);
-                if (r32 == null || r32.Length == 0)
+                bool success = Device.ToggleVReg(_currentPMICAddress, out bool newState);
+                if (success)
                 {
-                    LogResponse("✗ Could not read register 0x32", "Err");
-                    return;
-                }
-
-                bool vrCurrentlyOn = (r32[0] & 0x80) != 0;
-
-                // Check mode – if Locked, use the PMIC_CTRL pin instead
-                string mode = Device.GetPMICMode(_currentPMICAddress);
-
-                if (mode == "Locked")
-                {
-                    // Toggle PMIC_CTRL pin
-                    bool pinState = Device.GetPin(SPDToolDevice.PIN_PMIC_CTRL) == 1;
-                    Device.SetPin(SPDToolDevice.PIN_PMIC_CTRL,
-                        pinState ? (byte)0x00 : (byte)0x01);
-                    LogResponse($"PMIC is locked – toggled PMIC_CTRL pin {(pinState ? "LOW→HIGH" : "HIGH→LOW")}");
+                    LogResponse($"Switching regulators {(newState ? "enabled" : "disabled")}");
                 }
                 else
                 {
-                    // Programmable / Manufacturer mode: write 0x32
-                    byte newVal = vrCurrentlyOn ? (byte)0x00 : (byte)0x80;
-                    Device.WriteI2CDevice(_currentPMICAddress, 0x32, newVal);
-                    LogResponse($"Switching regulators {(vrCurrentlyOn ? "disabled (0x00 → reg 0x32)" : "enabled (0x80 → reg 0x32)")}");
+                    LogResponse("✗ Failed to toggle regulators", "Err");
                 }
-
                 Thread.Sleep(150);
                 DetectPMICInfo();
             }
@@ -1083,12 +1053,10 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        // ADDED: Unlock vendor region button
         private void OnUnlockVendorClicked(object sender, EventArgs e)
         {
             if (Device == null || _currentPMICAddress == 0) return;
 
-            // Ask which password to use
             var dlg = MessageBox.Show(
                 "Use the default JEDEC password (0x73 / 0x94)?\n\nClick 'Yes' for default, 'No' to enter a custom password.",
                 "Unlock Vendor Region", MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
@@ -1099,7 +1067,6 @@ namespace UnifiedDDRSPDFlasher
 
             if (dlg == DialogResult.No)
             {
-                // Try to load saved password
                 var saved = LoadSavedPassword();
                 if (saved.HasValue)
                 {
@@ -1129,7 +1096,6 @@ namespace UnifiedDDRSPDFlasher
             finally { Cursor = Cursors.Default; }
         }
 
-        // ADDED: Lock vendor region button
         private void OnLockVendorClicked(object sender, EventArgs e)
         {
             if (Device == null || _currentPMICAddress == 0) return;
@@ -1147,16 +1113,14 @@ namespace UnifiedDDRSPDFlasher
             finally { Cursor = Cursors.Default; }
         }
 
-        // ADDED: Advanced dialog
         private void OnAdvancedClicked(object sender, EventArgs e)
         {
             if (Device == null || _currentPMICAddress == 0) return;
             using var dlg = new AdvancedPMICDialog(Device, _currentPMICAddress);
             dlg.ShowDialog(this);
-            DetectPMICInfo(); // refresh info after dialog closes
+            DetectPMICInfo();
         }
 
-        // ADDED: Burn all vendor blocks (0x40–0x6F)
         private void OnBurnVendorClicked(object sender, EventArgs e)
         {
             if (_currentDump == null || _currentDump.Length < 256)
@@ -1191,7 +1155,6 @@ namespace UnifiedDDRSPDFlasher
                     LogResponse(ok ? $"  ✓ Block {blk} burned" : $"  ✗ Block {blk} failed", ok ? "Info" : "Err");
                     if (!ok) errors++;
 
-                    // Verify readback
                     if (ok) VerifyBlock(blk, chunk);
                 }
 
@@ -1211,7 +1174,6 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        // ADDED: Burn single block
         private void OnBurnBlockClicked(byte startReg, byte endReg)
         {
             if (_currentDump == null || _currentDump.Length < 256)
@@ -1220,7 +1182,7 @@ namespace UnifiedDDRSPDFlasher
                 return;
             }
 
-            int blockIndex = (startReg - 0x40) / 16; // 0x40→0, 0x50→1, 0x60→2
+            int blockIndex = (startReg - 0x40) / 16;
 
             var confirm = MessageBox.Show(
                 $"⚠  Burn MTP block {blockIndex} (0x{startReg:X2}–0x{endReg:X2}) on PMIC 0x{_currentPMICAddress:X2}?\n\n" +
@@ -1251,22 +1213,14 @@ namespace UnifiedDDRSPDFlasher
             finally { Cursor = Cursors.Default; }
         }
 
-        /// <summary>
-        /// Reads back a vendor block after burn and logs pass/fail.
-        /// Temporarily unlocks the vendor region to perform the read,
-        /// then re‑locks it to leave the PMIC in a secure state.
-        /// </summary>
         private void VerifyBlock(int blockIndex, byte[] expected)
         {
-            if (Device == null || _currentPMICAddress == 0)
-                return;
+            if (Device == null || _currentPMICAddress == 0) return;
 
-            // Try to load saved custom password; otherwise use JEDEC default.
             var saved = LoadSavedPassword();
             byte passLsb = saved?.lsb ?? 0x73;
             byte passMsb = saved?.msb ?? 0x94;
 
-            // Save current lock state? Not needed; we'll unlock, verify, and lock.
             bool unlockOk = Device.UnlockVendorRegion(_currentPMICAddress, passLsb, passMsb);
             if (!unlockOk)
             {
@@ -1299,11 +1253,9 @@ namespace UnifiedDDRSPDFlasher
             }
             finally
             {
-                // Re‑lock the vendor region
                 Device.LockVendorRegion(_currentPMICAddress);
             }
         }
-
 
         private void OnOpenDumpClicked(object sender, EventArgs e)
         {
@@ -1368,11 +1320,6 @@ namespace UnifiedDDRSPDFlasher
 
         #region Helper Methods
 
-        /// <summary>
-        /// Improved hex dump display with alternating row backgrounds and colour-coded regions.
-        /// Rows at even index get white background; odd rows get a very light grey.
-        /// Vendor MTP registers (0x40–0x6F) are colour-highlighted.
-        /// </summary>
         private void DisplayHexDump(byte[] data)
         {
             if (data == null || data.Length == 0)
@@ -1385,7 +1332,6 @@ namespace UnifiedDDRSPDFlasher
             _hexViewer.Clear();
             _hexViewer.SuspendLayout();
 
-            // Header line
             _hexViewer.SelectionFont = new Font("Consolas", 13F, FontStyle.Bold);
             _hexViewer.SelectionColor = Color.FromArgb(0, 78, 152);
             _hexViewer.SelectionBackColor = Color.FromArgb(230, 238, 255);
@@ -1398,7 +1344,6 @@ namespace UnifiedDDRSPDFlasher
             {
                 Color bg = rowBg[(i / 16) % 2];
 
-                // Offset
                 _hexViewer.SelectionFont = new Font("Consolas", 13F);
                 _hexViewer.SelectionColor = Color.FromArgb(80, 80, 80);
                 _hexViewer.SelectionBackColor = bg;
@@ -1408,7 +1353,6 @@ namespace UnifiedDDRSPDFlasher
 
                 for (int j = 0; j < 16; j++)
                 {
-                    // Extra space at the 8-byte midpoint
                     if (j == 8)
                     {
                         _hexViewer.SelectionColor = Color.Black;
@@ -1432,7 +1376,6 @@ namespace UnifiedDDRSPDFlasher
                     }
                 }
 
-                // ASCII column
                 _hexViewer.SelectionColor = Color.FromArgb(100, 100, 100);
                 _hexViewer.SelectionBackColor = bg;
                 _hexViewer.AppendText("  ");
@@ -1450,16 +1393,15 @@ namespace UnifiedDDRSPDFlasher
             _hexViewer.ResumeLayout();
         }
 
-        /// <summary>Returns display colour based on PMIC register address region.</summary>
         private static Color GetAddressColor(int address, byte value)
         {
-            if (value == 0x00) return Color.Silver;        // zero bytes – de-emphasised
-            if (address < 0x10) return Color.DarkBlue;    // control / status
+            if (value == 0x00) return Color.Silver;
+            if (address < 0x10) return Color.DarkBlue;
             if (address < 0x20) return Color.Navy;
-            if (address < 0x40) return Color.SteelBlue;   // volatile config
-            if (address < 0x50) return Color.Purple;       // MTP block 0
-            if (address < 0x60) return Color.DarkOrange;   // MTP block 1
-            if (address < 0x70) return Color.DarkRed;      // MTP block 2
+            if (address < 0x40) return Color.SteelBlue;
+            if (address < 0x50) return Color.Purple;
+            if (address < 0x60) return Color.DarkOrange;
+            if (address < 0x70) return Color.DarkRed;
             return Color.Black;
         }
 
@@ -1498,7 +1440,6 @@ namespace UnifiedDDRSPDFlasher
             _powerGoodLabel.ForeColor = Color.Gray;
         }
 
-        // Convenience factory for uniform-looking buttons
         private static Button MakeButton(string text, int width, bool enabled)
         {
             var btn = new Button
@@ -1515,7 +1456,6 @@ namespace UnifiedDDRSPDFlasher
             return btn;
         }
 
-        // Convenience factory for inline TextBox rows (label + textbox)
         private static FlowLayoutPanel BuildInlineTextBox(string label, out TextBox textBox, int boxWidth)
         {
             var panel = new FlowLayoutPanel
@@ -1567,14 +1507,12 @@ namespace UnifiedDDRSPDFlasher
         private static string PasswordFilePath =>
             Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "pmic_password.json");
 
-        /// <summary>Saves a custom PMIC password to JSON in the application directory.</summary>
         public static void SavePassword(byte lsb, byte msb)
         {
             var obj = new { lsb, msb, saved = DateTime.Now.ToString("O") };
             File.WriteAllText(PasswordFilePath, System.Text.Json.JsonSerializer.Serialize(obj));
         }
 
-        /// <summary>Loads a previously saved custom PMIC password. Returns null if none.</summary>
         public static (byte lsb, byte msb)? LoadSavedPassword()
         {
             try
@@ -1592,14 +1530,9 @@ namespace UnifiedDDRSPDFlasher
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // ADDED: Advanced PMIC Dialog
+    // Advanced PMIC Dialog
     // ═════════════════════════════════════════════════════════════════════════
 
-    /// <summary>
-    /// Advanced PMIC options dialog.
-    /// Provides: custom password change (with save-to-file), programmable-mode
-    /// enable, PWR_GOOD pin/register control, and PWR_GOOD pin state readout.
-    /// </summary>
     internal sealed class AdvancedPMICDialog : Form
     {
         private readonly SPDToolDevice _device;
@@ -1636,7 +1569,6 @@ namespace UnifiedDDRSPDFlasher
             main.RowStyles.Add(new RowStyle(SizeType.Absolute, 130F));
             main.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
-            // ── Password change ──────────────────────────────────────────────
             GroupBox passGroup = new GroupBox
             {
                 Text = "Change Vendor Region Password  (JEDEC §17.3.2)",
@@ -1658,7 +1590,6 @@ namespace UnifiedDDRSPDFlasher
             passLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F));
             passLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
-            // Row 0: labels
             passLayout.Controls.Add(new Label { Text = "Current LSB (0x):", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8.5F) }, 0, 0);
             _curLsbText = MkTB(); passLayout.Controls.Add(_curLsbText, 1, 0);
             passLayout.Controls.Add(new Label { Text = "Current MSB (0x):", TextAlign = ContentAlignment.MiddleLeft, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8.5F) }, 2, 0);
@@ -1683,7 +1614,6 @@ namespace UnifiedDDRSPDFlasher
             passGroup.Controls.Add(passLayout);
             main.Controls.Add(passGroup, 0, 0);
 
-            // ── Enable programmable mode ─────────────────────────────────────
             GroupBox progGroup = new GroupBox
             {
                 Text = "Enable Programmable Mode  (JEDEC §17.2)",
@@ -1710,7 +1640,6 @@ namespace UnifiedDDRSPDFlasher
             progGroup.Controls.Add(progLayout);
             main.Controls.Add(progGroup, 0, 1);
 
-            // ── PWR_GOOD control ─────────────────────────────────────────────
             GroupBox pgGroup = new GroupBox
             {
                 Text = "PWR_GOOD Pin / Register Control",
@@ -1750,7 +1679,6 @@ namespace UnifiedDDRSPDFlasher
             pgGroup.Controls.Add(pgLayout);
             main.Controls.Add(pgGroup, 0, 2);
 
-            // ── Close button ─────────────────────────────────────────────────
             var closeBtn = new Button
             {
                 Text = "Close",
@@ -1772,7 +1700,6 @@ namespace UnifiedDDRSPDFlasher
 
             this.Controls.Add(main);
 
-            // Initial refresh
             RefreshPGoodPin();
         }
 
@@ -1821,7 +1748,7 @@ namespace UnifiedDDRSPDFlasher
             try
             {
                 Cursor = Cursors.WaitCursor;
-                bool success = _device.SmartEnableProgrammableMode(_pmicAddress);
+                bool success = _device.EnableProgMode(_pmicAddress);
                 MessageBox.Show(success
                     ? "Programmable mode enabled successfully.\nThe PMIC is now in Programmable Mode."
                     : "Failed to enable Programmable Mode.\nCheck connection and try again.",
@@ -1843,9 +1770,9 @@ namespace UnifiedDDRSPDFlasher
         {
             try
             {
-                byte pinState = _device.GetPin(SPDToolDevice.PIN_PMIC_FLAG);
-                _pgoodPinLabel.Text = $"PWR_GOOD pin state: {(pinState == 1 ? "HIGH (asserted)" : "LOW (de-asserted)")}";
-                _pgoodPinLabel.ForeColor = pinState == 1 ? Color.DarkGreen : Color.DarkRed;
+                bool asserted = _device.GetPGoodPinState();
+                _pgoodPinLabel.Text = $"PWR_GOOD pin state: {(asserted ? "HIGH (asserted)" : "LOW (de-asserted)")}";
+                _pgoodPinLabel.ForeColor = asserted ? Color.DarkGreen : Color.DarkRed;
             }
             catch (Exception ex)
             {
@@ -1853,29 +1780,21 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        /// <summary>
-        /// Sets PWR_GOOD output mode via register 0x32 bits [4:3].
-        /// mode 0 = normal (hardware), 1 = forced LOW, 2 = forced HIGH.
-        /// JEDEC PMIC5100 §7 / register 0x32.
-        /// </summary>
         private void SetPGoodMode(int mode)
         {
             try
             {
-                var r32 = _device.ReadPMICDevice(_pmicAddress, 0x32);
-                if (r32 == null || r32.Length == 0) { ShowRegError(); return; }
-
-                // Clear bits [4:3], set new mode
-                byte newVal = (byte)((r32[0] & ~0x18) | ((mode & 0x03) << 3));
-                bool ok = _device.WriteI2CDevice(_pmicAddress, 0x32, newVal);
-
+                bool ok = _device.SetPGoodOutputMode(_pmicAddress, mode);
                 MessageBox.Show(ok
                     ? $"PWR_GOOD mode set to: {new[] { "Normal (auto)", "Forced LOW", "Forced HIGH" }[mode]}"
                     : "Failed to write register 0x32.",
                     ok ? "Done" : "Error", MessageBoxButtons.OK,
                     ok ? MessageBoxIcon.Information : MessageBoxIcon.Error);
             }
-            catch (Exception ex) { MessageBox.Show(ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error); }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.Message, "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
         }
 
         private static void ShowRegError() =>
