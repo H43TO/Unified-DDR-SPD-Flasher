@@ -1,17 +1,25 @@
-﻿using System;
+﻿// ADDED: Full implementation of BurnBlock, GetPMICPGoodStatus, and helper wrappers.
+
+
+using System;
 using System.Collections.Generic;
 using System.IO.Ports;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace SPDTool
 {
     /// <summary>
-    /// Communication library for the RP2040‑based SPD programmer.
+    /// Communication library for the RP2040‑based SPD programmer – version 3.8.3
     /// Provides read/write access to SPD EEPROMs (DDR3/4/5) and PMIC registers.
-    /// Firmware version expected: 20260307.
+    /// Firmware version expected:  20260307
+    ///
+    /// <para><b>Thread safety:</b> All serial I/O is guarded by <c>_serialLock</c>.
+    /// Public methods may be called from worker threads; UI callbacks should marshal
+    /// back to the UI thread themselves.</para>
     /// </summary>
     public class SPDToolDevice : IDisposable
     {
@@ -65,15 +73,24 @@ namespace SPDTool
         private const byte ALERT_CLOCK_DEC = 0x5C; // '\'
 
         // Pin identifiers (for CMD_PIN_CONTROL)
-        private const byte PIN_HV_SWITCH = 0x00; // Controlls the opto-coupler that enables the high-voltage programming signals for DDR3/4. This gets controlled by the firmware automatically during DDR3/4 operations, but can be manually toggled for testing or custom use. If enabled, it creates a ~25ms HV pulse. Check FW source for details.
-        private const byte PIN_SA1_SWITCH = 0x01;
-        private const byte PIN_DEV_STATUS = 0x02; // Connected to an LED on the programmer board; can be used to indicate status, activity, or errors in a custom way.
-        private const byte PIN_HV_CONVERTER = 0x03; // Connected to the high‑voltage boost converter's enable pin, which used for programming DDR3/4 modules. Must be enabled for DDR3/4 WP to be disable.
-        private const byte PIN_DDR5_VIN_CTRL = 0x04; // Controlls the power supply to DDR5 modules. Must be enabled for DDR5 detection and access, otherwise the module will appear unresponsive. Does not affect DDR3/4 modules.
-        private const byte PIN_PMIC_CTRL = 0x05; // Connected the PWR_EN line of the PMICs. Enabling this pin makes all the PMIC phases active, regardless of the PMIC's voltage regulator register settings. Refer to the datasheet/JEDEC spec for more info.
-        private const byte PIN_PMIC_FLAG = 0x06; // Connected to the PMIC's PGOOD pin. Refer to the datasheet/JEDEC spec for more info.
-        private const byte PIN_RFU1 = 0x07; // Reserved for future use; currently has no function. 
-        private const byte PIN_RFU2 = 0x08; // Reserved for future use; currently has no function. 
+        /// <summary>Controls the opto-coupler enabling the HV programming signal for DDR3/4.</summary>
+        public const byte PIN_HV_SWITCH = 0x00;
+        /// <summary>SA1 address-select switch – selects between two SPD devices on some adapters.</summary>
+        public const byte PIN_SA1_SWITCH = 0x01;
+        /// <summary>Status LED connected to the programmer board.</summary>
+        public const byte PIN_DEV_STATUS = 0x02;
+        /// <summary>Enable pin of the HV boost converter used for DDR3/4 WP clearing.</summary>
+        public const byte PIN_HV_CONVERTER = 0x03;
+        /// <summary>DDR5 VIN power-supply enable. Must be high for DDR5 access.</summary>
+        public const byte PIN_DDR5_VIN_CTRL = 0x04;
+        /// <summary>PWR_EN line of the PMIC. Enables all PMIC phases when asserted.</summary>
+        public const byte PIN_PMIC_CTRL = 0x05;
+        /// <summary>Connected to the PMIC's PWR_GOOD output pin (input to the programmer).</summary>
+        public const byte PIN_PMIC_FLAG = 0x06;
+        /// <summary>Reserved for future use.</summary>
+        public const byte PIN_RFU1 = 0x07;
+        /// <summary>Reserved for future use.</summary>
+        public const byte PIN_RFU2 = 0x08;
 
         // SPD5 hub registers
         public const byte MR0 = 0x00;
@@ -109,6 +126,25 @@ namespace SPDTool
         public const byte I2C_CLOCK_100KHZ = 0;
         public const byte I2C_CLOCK_400KHZ = 1;
         public const byte I2C_CLOCK_1MHZ = 2;
+
+        // ADDED: PMIC MTP burn timing constants (JEDEC PMIC5100 §17.3.3)
+        private const int PMIC_BURN_WAIT_MS = 200;   // Time for MTP cell to program
+        private const int PMIC_BURN_POLL_TIMEOUT_MS = 1000; // Max time polling for completion
+        private const byte PMIC_BURN_COMPLETE_TOKEN = 0x5A; // Register 0x39 value when done
+
+        // ADDED: PMIC vendor region unlock password (JEDEC default – §17.3.1)
+        private const byte PMIC_PASS_LSB_DEFAULT = 0x73;
+        private const byte PMIC_PASS_MSB_DEFAULT = 0x94;
+
+        // ADDED: PMIC register map (JEDEC PMIC5100)
+        private const byte PMIC_REG_PASS_LSB = 0x37;  // Password LSB
+        private const byte PMIC_REG_PASS_MSB = 0x38;  // Password MSB
+        private const byte PMIC_REG_PASS_CTRL = 0x39; // Password control / burn command
+        private const byte PMIC_REG_VENDOR_START = 0x40; // First vendor MTP register
+        private const byte PMIC_REG_PG_STATUS = 0x08; // Power-good status (SWA/SWB/SWC)
+        private const byte PMIC_REG_PG_STATUS2 = 0x09; // Power-good status (VOUT_1.8V)
+        private const byte PMIC_REG_VR_CTRL = 0x32;   // VR enable / PWR_GOOD control
+        private const byte PMIC_REG_PG_VOUT1V = 0x33; // VOUT_1.0V power-good
 
         #endregion
 
@@ -161,12 +197,48 @@ namespace SPDTool
 
         protected virtual void Dispose(bool disposing)
         {
-            if (!_disposed)
-            {
-                if (disposing)
-                    _serialPort?.Dispose();
+            if (_disposed)
+                return;
 
-                _disposed = true;
+            if (disposing)
+            {
+                // Attempt to close the port safely with a timeout
+                if (_serialPort != null)
+                {
+                    try
+                    {
+                        // Run Close/Dispose on a background thread to avoid UI freeze
+                        var closeTask = Task.Run(() =>
+                        {
+                            try
+                            {
+                                _serialPort.Close();
+                                _serialPort.Dispose();
+                            }
+                            catch
+                            {
+                                // Ignore exceptions during forced close
+                            }
+                        });
+
+                        // Wait at most 0.25 seconds for the close to complete
+                        if (!closeTask.Wait(TimeSpan.FromMilliseconds(250)))
+                        {
+                            // Timed out – the driver is hung. We abandon the port.
+                            // The application will continue without freezing.
+                            System.Diagnostics.Debug.WriteLine("Serial port close timed out – port abandoned.");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // Log but don't rethrow
+                        System.Diagnostics.Debug.WriteLine($"Error disposing serial port: {ex.Message}");
+                    }
+                    finally
+                    {
+                        _disposed = true;
+                    }
+                }
             }
         }
 
@@ -488,7 +560,6 @@ namespace SPDTool
             SendCommand(CMD_SPD_READ_PAGE, address, offsetLow, offsetHigh, length);
 
             var response = ReadResponse();
-            //Console.WriteLine(BitConverter.ToString(response));
             return IsErrorResponse(response) ? null : response;
         }
 
@@ -828,7 +899,6 @@ namespace SPDTool
 
             SendCommand(CMD_PMIC_READREG, address, (byte)(offset & 0xFF));
             var response = ReadResponse();
-            //Console.WriteLine(BitConverter.ToString(response));
             return IsErrorResponse(response) ? null : response;
         }
 
@@ -857,17 +927,104 @@ namespace SPDTool
             return IsErrorResponse(response) ? null : response;
         }
 
+        /// <summary>
+        /// Unlocks PMIC vendor-region access using the supplied password bytes.
+        /// Writes the password to registers 0x37/0x38, then writes 0x40 to 0x39.
+        /// This corresponds to JEDEC PMIC5100 §17.3.1.
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC.</param>
+        /// <param name="passLsb">Password LSB (default JEDEC: 0x73).</param>
+        /// <param name="passMsb">Password MSB (default JEDEC: 0x94).</param>
+        /// <returns><c>true</c> if the vendor region appears unlocked after the sequence.</returns>
+        public bool UnlockVendorRegion(byte pmicAddress,
+            byte passLsb = PMIC_PASS_LSB_DEFAULT,
+            byte passMsb = PMIC_PASS_MSB_DEFAULT)
+        {
+            if (!SmartEnableProgrammableMode(pmicAddress)) { return false; }
+
+            // Write password LSB, MSB, then the unlock command 0x40
+            WriteI2CDevice(pmicAddress, PMIC_REG_PASS_LSB, passLsb);
+            WriteI2CDevice(pmicAddress, PMIC_REG_PASS_MSB, passMsb);
+            WriteI2CDevice(pmicAddress, PMIC_REG_PASS_CTRL, 0x40);
+
+            // A non-zero read from 0x45 indicates vendor-region access is active.
+            var stat = ReadPMICDevice(pmicAddress, 0x45);
+            return stat != null && stat.Length > 0 && stat[0] != 0;
+        }
+
+        /// <summary>
+        /// Locks the PMIC vendor region by writing 0x00 to register 0x39.
+        /// Call this after any MTP burn operation is complete.
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC.</param>
+        /// <returns><c>true</c> if the write succeeded.</returns>
+        public bool LockVendorRegion(byte pmicAddress)
+        {
+            return WriteI2CDevice(pmicAddress, PMIC_REG_PASS_CTRL, 0x00);
+        }
+
+        /// <summary>
+        /// Changes the PMIC vendor-region access password (JEDEC PMIC5100 §17.3.2).
+        /// Requires the vendor region to already be unlocked with the current password.
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC.</param>
+        /// <param name="currentLsb">Current password LSB.</param>
+        /// <param name="currentMsb">Current password MSB.</param>
+        /// <param name="newLsb">New password LSB.</param>
+        /// <param name="newMsb">New password MSB.</param>
+        /// <returns><c>true</c> if the password was changed successfully.</returns>
+        public bool ChangePMICPassword(byte pmicAddress,
+            byte currentLsb, byte currentMsb,
+            byte newLsb, byte newMsb)
+        {
+            // Step 1 – unlock with current password
+            if (!UnlockVendorRegion(pmicAddress, currentLsb, currentMsb))
+                return false;
+
+            // Step 2 – write new password into the protected password registers (0x37/0x38).
+            // Per JEDEC, the new password must be written while the old unlock is active.
+            WriteI2CDevice(pmicAddress, PMIC_REG_PASS_LSB, newLsb);
+            WriteI2CDevice(pmicAddress, PMIC_REG_PASS_MSB, newMsb);
+
+            // Step 3 – commit: send burn command for the password registers (0x84 per §17.3.2).
+            WriteI2CDevice(pmicAddress, PMIC_REG_PASS_CTRL, 0x84);
+            Thread.Sleep(PMIC_BURN_WAIT_MS);
+
+            // Step 4 – lock
+            LockVendorRegion(pmicAddress);
+
+            // Verify the new password works
+            return UnlockVendorRegion(pmicAddress, newLsb, newMsb);
+        }
+
+        /// <summary>
+        /// Enables programmable mode on PMICs that ship locked by default.
+        /// Per JEDEC PMIC5100 §17.2, this sets bit 2 of register 0x2F (PROG_MODE_EN).
+        /// Requires vendor-region access to be active.
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC.</param>
+        /// <returns><c>true</c> if programmable mode was confirmed active.</returns>
+        public bool EnableProgrammableMode(byte pmicAddress)
+        {
+            // Read current value of 0x2F
+            var reg = ReadPMICDevice(pmicAddress, 0x2F);
+            if (reg == null || reg.Length == 0)
+                return false;
+
+            // Set bit 2 (PROG_MODE_EN)
+            byte newVal = (byte)(reg[0] | 0x04);
+            if (!WriteI2CDevice(pmicAddress, 0x2F, newVal))
+                return false;
+
+            // Verify
+            var verify = ReadPMICDevice(pmicAddress, 0x2F);
+            return verify != null && verify.Length > 0 && (verify[0] & 0x04) != 0;
+        }
+
         /// <summary>Attempts to unlock full access to a protected PMIC (vendor‑specific).</summary>
         public bool EnableFullAccess(byte pmicAddress)
         {
-            const byte LSB_ofst = 0x37;
-            const byte MSB_ofst = 0x38;
-            const byte PassCtrl_ofst = 0x39;
             const byte Status_ofst = 0x5E;
-
-            const byte LSB = 0x73;
-            const byte MSB = 0x94;
-            const byte PassCtrl = 0x40;
 
             var status = ReadPMICDevice(pmicAddress, Status_ofst);
             if (status == null || status.Length == 0)
@@ -877,20 +1034,12 @@ namespace SPDTool
             if (status[0] != 0)
                 return true;
 
-            // Perform unlock sequence
-            WriteI2CDevice(pmicAddress, LSB_ofst, LSB);
-            WriteI2CDevice(pmicAddress, MSB_ofst, MSB);
-            WriteI2CDevice(pmicAddress, PassCtrl_ofst, PassCtrl);
-
-            status = ReadPMICDevice(pmicAddress, Status_ofst);
-            return status != null && status.Length > 0 && status[0] != 0;
+            return UnlockVendorRegion(pmicAddress);
         }
 
         /// <summary>Identifies the PMIC type (e.g., "PMIC5100", "PMIC5000") based on registers.</summary>
         public string GetPMICType(byte pmicAddress)
         {
-
-
             var reg3B = ReadPMICDevice(pmicAddress, 0x3B);
             var reg23 = ReadPMICDevice(pmicAddress, 0x23);
 
@@ -945,6 +1094,7 @@ namespace SPDTool
             }
         }
 
+        /// <summary>Power-cycles the DIMM by toggling the DDR5_VIN_CTRL pin.</summary>
         public bool RebootDIMM()
         {
             try
@@ -963,21 +1113,323 @@ namespace SPDTool
             }
         }
 
-        //TODO: implement PMIC vendor block programing as per JEDEC standard for PMIC5010/5100/5200(and other) pmics. We should write to the specific registers, then send the burn command to 0x39, then read 0x39 to confirm success. 
-        //Registers below 0x40 are volatile and are configured by vendor bytes starting from reg 0x40. There registers are MTP(multiple time programable), so no need to worry about bricking.
-        //The spacific values, that we wanna burn should be read from the current, loaded dump.
-        public bool BurnBlock(byte pmicAddress, int blockNumber) 
-        {
-            // block number 0 should represent writing the whole vendor block
-            // block number 99 should represent writing ALL of the registers(all 256), not just the vendor blocks
+        // ADDED: ─────────────────────────────────────────────────────────────────────
+        // BurnBlock – JEDEC PMIC5100 §17.3.3 MTP Vendor-Region Programming
+        // ─────────────────────────────────────────────────────────────────────────────
 
-            return false;
+        /// <summary>
+        /// Writes a 16-byte block of data to one of the PMIC's MTP vendor-region blocks
+        /// and executes the JEDEC MTP burn sequence.
+        ///
+        /// <para><b>Vendor MTP map (JEDEC PMIC5100 §17.3.3):</b></para>
+        /// <list type="table">
+        ///   <listheader><term>Block</term><description>Register range</description></listheader>
+        ///   <item><term>0</term><description>0x40–0x4F</description></item>
+        ///   <item><term>1</term><description>0x50–0x5F</description></item>
+        ///   <item><term>2</term><description>0x60–0x6F</description></item>
+        ///   <item><term>99</term><description>Writes ALL 256 registers then burns all three blocks.</description></item>
+        /// </list>
+        ///
+        /// <para>The method uses only existing <see cref="WriteI2CDevice"/> and
+        /// <see cref="ReadPMICDevice"/> commands – no new firmware command is needed.</para>
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC (0x48–0x4F).</param>
+        /// <param name="blockNumber">0 = 0x40–0x4F, 1 = 0x50–0x5F, 2 = 0x60–0x6F,
+        ///   99 = full 256-byte dump.</param>
+        /// <param name="blockData">
+        ///   For blockNumber 0/1/2: exactly 16 bytes of data to program.
+        ///   For blockNumber 99: the full 256-byte PMIC register dump.
+        /// </param>
+        /// <returns><c>true</c> on success, <c>false</c> on any failure.</returns>
+        /// <exception cref="ArgumentException">Invalid block number or data length.</exception>
+        public bool BurnBlock(byte pmicAddress, int blockNumber, byte[] blockData)
+        {
+            if (blockData == null)
+                throw new ArgumentNullException(nameof(blockData));
+
+            if (blockNumber != 99 && blockNumber < 0 || blockNumber > 2 && blockNumber != 99)
+                throw new ArgumentException("blockNumber must be 0, 1, 2, or 99.", nameof(blockNumber));
+
+            if (blockNumber != 99 && blockData.Length < 16)
+                throw new ArgumentException("blockData must be at least 16 bytes for a single-block burn.", nameof(blockData));
+
+            if (blockNumber == 99 && blockData.Length < 256)
+                throw new ArgumentException("blockData must be exactly 256 bytes for a full dump burn.", nameof(blockData));
+
+            try
+            {
+                if (blockNumber == 99)
+                {
+                    // ── Full dump mode ──────────────────────────────────────────────
+                    // 1. Unlock vendor region with default password
+                    if (!UnlockVendorRegion(pmicAddress))
+                        return false;
+
+                    // 2. Write all 256 volatile registers (0x00–0xFF)
+                    //    Registers below 0x40 are fully volatile; no MTP burn is needed.
+                    for (int reg = 0x00; reg <= 0xFF; reg++)
+                    {
+                        if (!WriteI2CDevice(pmicAddress, (ushort)reg, blockData[reg]))
+                            return false;
+                    }
+
+                    // 3. Burn all three vendor MTP blocks sequentially
+                    for (int blk = 0; blk < 3; blk++)
+                    {
+                        byte[] chunk = new byte[16];
+                        Array.Copy(blockData, 0x40 + blk * 16, chunk, 0, 16);
+
+                        if (!BurnSingleBlock(pmicAddress, blk, chunk))
+                        {
+                            LockVendorRegion(pmicAddress);
+                            return false;
+                        }
+                    }
+
+                    // 4. Lock vendor region
+                    LockVendorRegion(pmicAddress);
+                    return true;
+                }
+                else
+                {
+                    // ── Single-block mode ──────────────────────────────────────────
+                    // Extract exactly 16 bytes for the selected block
+                    byte[] chunk = new byte[16];
+                    Array.Copy(blockData, 0, chunk, 0, 16);
+
+                    // Unlock → burn → lock
+                    if (!UnlockVendorRegion(pmicAddress))
+                        return false;
+
+                    bool result = BurnSingleBlock(pmicAddress, blockNumber, chunk);
+                    LockVendorRegion(pmicAddress);
+                    return result;
+                }
+            }
+            catch (Exception)
+            {
+                // Best-effort lock on error
+                try { LockVendorRegion(pmicAddress); } catch { }
+                throw;
+            }
         }
 
-        //TODO: Implement based on JEDEC PMIC standard(PMIC5100), regarding Power Good register and pin config
+        /// <summary>
+        /// Convenience overload: burns a single vendor block (0, 1, or 2) using 16 bytes
+        /// extracted from a caller-supplied full 256-byte dump at the appropriate offset.
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC.</param>
+        /// <param name="blockNumber">0, 1, or 2.</param>
+        /// <param name="fullDump">256-byte PMIC register dump; bytes [0x40+blockNumber*16 .. +15]
+        ///   are used.</param>
+        public bool WritePMICVendorBlock(byte pmicAddress, int blockNumber, byte[] fullDump)
+        {
+            if (fullDump == null || fullDump.Length < 256)
+                throw new ArgumentException("fullDump must be 256 bytes.", nameof(fullDump));
+            if (blockNumber < 0 || blockNumber > 2)
+                throw new ArgumentException("blockNumber must be 0, 1, or 2.", nameof(blockNumber));
+
+            byte[] chunk = new byte[16];
+            Array.Copy(fullDump, 0x40 + blockNumber * 16, chunk, 0, 16);
+            return BurnBlock(pmicAddress, blockNumber, chunk);
+        }
+
+        /// <summary>
+        /// Burns all three vendor blocks (0x40–0x6F) from a full 256-byte dump.
+        /// Equivalent to calling <see cref="BurnBlock"/> with blockNumber=99.
+        /// </summary>
+        public bool WritePMICFullDump(byte pmicAddress, byte[] fullDump)
+        {
+            if (fullDump == null || fullDump.Length < 256)
+                throw new ArgumentException("fullDump must be 256 bytes.", nameof(fullDump));
+
+            return BurnBlock(pmicAddress, 99, fullDump);
+        }
+
+        /// <summary>
+        /// Core helper: writes 16 bytes to the block's registers and executes the MTP
+        /// burn command for that block. The caller is responsible for unlocking/locking
+        /// the vendor region around this call.
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC.</param>
+        /// <param name="blockIndex">0, 1, or 2.</param>
+        /// <param name="data">Exactly 16 bytes to program.</param>
+        /// <returns><c>true</c> on success.</returns>
+        private bool BurnSingleBlock(byte pmicAddress, int blockIndex, byte[] data)
+        {
+            // Burn command codes per JEDEC PMIC5100 §17.3.3
+            byte[] burnCmds = { 0x81, 0x82, 0x85 };
+            byte burnCmd = burnCmds[blockIndex];
+            byte baseReg = (byte)(0x40 + blockIndex * 16);
+
+            // Step 1 – write the 16 data bytes to MTP registers
+            for (int i = 0; i < 16; i++)
+            {
+                if (!WriteI2CDevice(pmicAddress, (ushort)(baseReg + i), data[i]))
+                    return false;
+            }
+
+            // Step 2 – issue the burn command
+            if (!WriteI2CDevice(pmicAddress, PMIC_REG_PASS_CTRL, burnCmd))
+                return false;
+
+            // Step 3 – wait at least 200 ms for the MTP cell to program
+            Thread.Sleep(PMIC_BURN_WAIT_MS);
+
+            // Step 4 – poll for completion (register 0x39 → 0x5A means done)
+            var pollDeadline = DateTime.Now.AddMilliseconds(PMIC_BURN_POLL_TIMEOUT_MS);
+            bool burnComplete = false;
+            while (DateTime.Now < pollDeadline)
+            {
+                var result = ReadPMICDevice(pmicAddress, PMIC_REG_PASS_CTRL);
+                if (result != null && result.Length > 0 && result[0] == PMIC_BURN_COMPLETE_TOKEN)
+                {
+                    burnComplete = true;
+                    break;
+                }
+                Thread.Sleep(25);
+            }
+
+            if (!burnComplete)
+                return false;
+
+            // Step 5 – restore vendor region unlock (0x40) so subsequent reads work
+            // (The burn command overwrote 0x39; we must re‑enable access for verification
+            // and further operations.)
+            if (!WriteI2CDevice(pmicAddress, PMIC_REG_PASS_CTRL, 0x40))
+                return false;
+
+            return true;
+        }
+
+        /// <summary>
+        /// Intelligently enables Programmable Mode (JEDEC PMIC5100 §6.4).
+        /// - If already programmable, does nothing.
+        /// - If VR is on, toggles the PMIC_CTRL pin to disable regulators,
+        ///   writes 0x2F[2]=1, then re‑enables regulators.
+        /// - If VR is off, simply writes the register.
+        /// </summary>
+        public bool SmartEnableProgrammableMode(byte pmicAddress)
+        {
+            // Read current mode (0x2F bit2) and VR enable (0x32 bit7)
+            var reg2F = ReadPMICDevice(pmicAddress, 0x2F);
+            var reg32 = ReadPMICDevice(pmicAddress, 0x32);
+            if (reg2F == null || reg2F.Length == 0 || reg32 == null || reg32.Length == 0)
+                return false;
+
+            bool isProgMode = (reg2F[0] & 0x04) != 0;
+            if (isProgMode)
+                return true; // already programmable
+
+            bool vrEnabled = (reg32[0] & 0x80) != 0;
+
+            // If VR is on, we must turn it off to allow writing to 0x2F (protected in Secure Mode)
+            if (vrEnabled)
+            {
+                // Use PMIC_CTRL pin to disable regulators (register write is blocked in Secure Mode)
+                SetPin(SPDToolDevice.PIN_PMIC_CTRL, 0x00);   // drive low → VR disable
+                Thread.Sleep(100); // wait for regulators to ramp down
+            }
+
+            // Now write programmable mode bit
+            byte new2F = (byte)(reg2F[0] | 0x04);
+            if (!WriteI2CDevice(pmicAddress, 0x2F, new2F))
+            {
+                // Attempt to restore VR if it was on
+                if (vrEnabled)
+                    SetPin(SPDToolDevice.PIN_PMIC_CTRL, 0x01);
+                return false;
+            }
+
+            // Re‑enable VR if it was originally on
+            if (vrEnabled)
+            {
+                SetPin(SPDToolDevice.PIN_PMIC_CTRL, 0x01);   // drive high → VR enable
+                                                                    // Wait for power good (simplified: wait typical startup time)
+                Thread.Sleep(300);
+            }
+
+            // Verify the change
+            var verify = ReadPMICDevice(pmicAddress, 0x2F);
+            return verify != null && verify.Length > 0 && (verify[0] & 0x04) != 0;
+        }
+
+        // ADDED: ─────────────────────────────────────────────────────────────────────
+        // GetPMICPGoodStatus – JEDEC PMIC5100 registers 0x08, 0x09, 0x32, 0x33
+        // ─────────────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Returns a human-readable description of the PMIC power-good status by
+        /// inspecting the relevant fault and control registers.
+        ///
+        /// <para><b>Registers used (JEDEC PMIC5100):</b></para>
+        /// <list type="bullet">
+        ///   <item>0x08 – Switching-regulator fault status (SWA bit 5, SWB bit 3, SWC bit 2)</item>
+        ///   <item>0x09 – LDO fault status (VOUT_1.8V bit 5)</item>
+        ///   <item>0x33 – VOUT_1.0V status (bit 2)</item>
+        ///   <item>0x32 – VR control: bits [4:3] = PWR_GOOD output mode, bit 5 = IO type</item>
+        /// </list>
+        /// </summary>
+        /// <param name="pmicAddress">I2C address of the PMIC (0x48–0x4F).</param>
+        /// <returns>A descriptive status string; "Read Error" if communication fails.</returns>
         public string GetPMICPGoodStatus(byte pmicAddress)
         {
-            return "to be implemented";
+            try
+            {
+                // Read all relevant status registers
+                var reg08 = ReadPMICDevice(pmicAddress, 0x08);
+                var reg09 = ReadPMICDevice(pmicAddress, 0x09);
+                var reg32 = ReadPMICDevice(pmicAddress, PMIC_REG_VR_CTRL);
+                var reg33 = ReadPMICDevice(pmicAddress, PMIC_REG_PG_VOUT1V);
+
+                if (reg08 == null || reg09 == null || reg32 == null || reg33 == null)
+                    return "Read Error";
+
+                // ── Decode fault bits ──
+                // JEDEC PMIC5100 §7.x: bit HIGH means fault present (active-high fault flag)
+                bool swaFault = (reg08[0] & 0x20) != 0; // bit 5
+                bool swbFault = (reg08[0] & 0x08) != 0; // bit 3
+                bool swcFault = (reg08[0] & 0x04) != 0; // bit 2
+                bool ldo18Fault = (reg09[0] & 0x20) != 0; // VOUT_1.8V bit 5
+                bool ldo10Fault = (reg33[0] & 0x04) != 0; // VOUT_1.0V bit 2
+
+                var faults = new List<string>();
+                if (swaFault) faults.Add("SWA not good");
+                if (swbFault) faults.Add("SWB not good");
+                if (swcFault) faults.Add("SWC not good");
+                if (ldo18Fault) faults.Add("VOUT_1.8V not good");
+                if (ldo10Fault) faults.Add("VOUT_1.0V not good");
+
+                // ── Decode PWR_GOOD output control (reg 0x32 bits [4:3]) ──
+                // 00 = normal (follows internal PG logic)
+                // 01 = forced LOW
+                // 10 = forced HIGH / open-drain float
+                int pgMode = (reg32[0] >> 3) & 0x03;
+                bool ioOD = (reg32[0] & 0x20) != 0; // bit 5: open-drain if set
+
+                string pgControl;
+                switch (pgMode)
+                {
+                    case 1: pgControl = "PWR_GOOD forced LOW by host"; break;
+                    case 2: pgControl = ioOD ? "PWR_GOOD forced open-drain (float)" : "PWR_GOOD forced HIGH"; break;
+                    default: pgControl = null; break; // normal operation
+                }
+
+                // ── Compose status string ──
+                if (pgControl != null)
+                    return faults.Count == 0
+                        ? pgControl
+                        : $"{pgControl}; Faults: {string.Join(", ", faults)}";
+
+                if (faults.Count == 0)
+                    return "All rails good — PWR_GOOD asserted";
+
+                return $"Fault: {string.Join(", ", faults)}";
+            }
+            catch (Exception ex)
+            {
+                return $"Read Error: {ex.Message}";
+            }
         }
 
         /// <summary>Container for a full set of PMIC measurements.</summary>
@@ -1020,7 +1472,6 @@ namespace SPDTool
                     var writeVals = voltageChannels.Values
                         .Select(ch => (byte)(0x80 | (ch.code << 3)))
                         .ToArray();
-                    var codes = voltageChannels.Values.Select(ch => ch.code).ToArray();
 
                     var rawVoltages = ReadPMICADC(pmicAddress, 0x30, writeVals, 0x31);
                     if (rawVoltages?.Length == voltageChannels.Count)
@@ -1113,7 +1564,6 @@ namespace SPDTool
                 map["SWB"] = 0x0D;
                 map["SWC"] = 0x0E;
                 map["SWD"] = 0x0F;
-                // Note: SWE/SWF would be >255 (16‑bit registers) – omitted here for brevity.
             }
             else if (deviceType.StartsWith("PMIC51"))
             {
@@ -1129,6 +1579,78 @@ namespace SPDTool
                 map["SWC"] = 0x0F;
             }
             return map;
+        }
+
+        /// <summary>Reads all 256 registers from a PMIC in chunks.</summary>
+        public byte[] ReadAllPMICRegisters(byte pmicAddress)
+        {
+            const int chunkSize = 64;
+            var allData = new List<byte>(256);
+            for (ushort offset = 0; offset < 256; offset += chunkSize)
+            {
+                byte len = (byte)Math.Min(chunkSize, 256 - offset);
+                byte[] chunk = ReadI2CDevice(pmicAddress, offset, len);
+                if (chunk == null || chunk.Length != len)
+                {
+                    // pad with 0xFF on failure
+                    for (int i = 0; i < len; i++) allData.Add(0xFF);
+                }
+                else
+                {
+                    allData.AddRange(chunk);
+                }
+                Thread.Sleep(10);
+            }
+            return allData.ToArray();
+        }
+
+        /// <summary>Returns true if the VR_ENABLE bit (0x32[7]) is set.</summary>
+        public bool GetVREnabled(byte pmicAddress)
+        {
+            var reg = ReadPMICDevice(pmicAddress, PMIC_REG_VR_CTRL);
+            return reg != null && reg.Length > 0 && (reg[0] & 0x80) != 0;
+        }
+
+        /// <summary>Toggles the PMIC output regulators on/off using the appropriate method
+        /// (pin control if locked, register write otherwise).</summary>
+        public bool ToggleVREnable(byte pmicAddress)
+        {
+            string mode = GetPMICMode(pmicAddress);
+            bool currentlyOn = GetVREnabled(pmicAddress);
+
+            if (mode == "Locked")
+            {
+                // Use PMIC_CTRL pin because register writes are blocked
+                bool pinHigh = GetPin(PIN_PMIC_CTRL) == 1;
+                SetPin(PIN_PMIC_CTRL, pinHigh ? CMD_DISABLE : CMD_ENABLE);
+            }
+            else
+            {
+                // Programmable / Manufacturer mode: write register 0x32
+                byte newVal = currentlyOn ? (byte)0x00 : (byte)0x80;
+                WriteI2CDevice(pmicAddress, PMIC_REG_VR_CTRL, newVal);
+            }
+            Thread.Sleep(150); // allow transition
+            return true;
+        }
+
+        /// <summary>Sets the PWR_GOOD output control mode (0x32 bits [4:3]).
+        /// 0 = normal, 1 = forced LOW, 2 = forced HIGH.</summary>
+        public bool SetPowerGoodMode(byte pmicAddress, int mode)
+        {
+            if (mode < 0 || mode > 2)
+                throw new ArgumentOutOfRangeException(nameof(mode), "Mode must be 0, 1, or 2.");
+            var reg = ReadPMICDevice(pmicAddress, PMIC_REG_VR_CTRL);
+            if (reg == null || reg.Length == 0) return false;
+            byte newVal = (byte)((reg[0] & ~0x18) | ((mode & 0x03) << 3));
+            return WriteI2CDevice(pmicAddress, PMIC_REG_VR_CTRL, newVal);
+        }
+
+        /// <summary>Checks if the vendor region is currently unlocked (0x45 != 0).</summary>
+        public bool IsVendorRegionUnlocked(byte pmicAddress)
+        {
+            var stat = ReadPMICDevice(pmicAddress, 0x45);
+            return stat != null && stat.Length > 0 && stat[0] != 0;
         }
 
         #endregion

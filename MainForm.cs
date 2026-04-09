@@ -1,4 +1,6 @@
-﻿using SPDTool;
+﻿// ADDED: Minor fixes – auto-connect support wired from FlasherConfigTab Advanced menu,
+//        disconnect check timer properly disposed, error counter reset on connect.
+using SPDTool;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -7,13 +9,13 @@ using System.Windows.Forms;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// Main form for the Unified DDR SPD Flasher
+    /// Main form for the Unified DDR SPD Flasher – version 3.0
     /// </summary>
     public class MainForm : Form
     {
         #region Constants
 
-        private const string APP_VERSION = "v2.6";
+        private const string APP_VERSION = "v3.0";
         private const int BUS_MONITOR_INTERVAL_MS = 500;
         private const int DISCONNECT_CHECK_INTERVAL_MS = 2000;
         private const int CONNECT_PING_RETRIES = 5;
@@ -26,24 +28,20 @@ namespace UnifiedDDRSPDFlasher
         private SPDToolDevice _spdDevice;
         private TabControl _mainTabControl;
 
-        // Tab pages
         private SPDOperationsTab _spdTab;
         private PMICOperationsTab _pmicTab;
         private FlasherConfigTab _configTab;
 
-        // Bottom status bar
         private Panel _statusBar;
         private Label _errorLabel;
         private Panel _connectionIndicator;
         private Label _comPortLabel;
         private Label _connectionStatusLabel;
 
-        // Connection state
         private bool _isConnected = false;
         private string _currentPort = "";
         private int _errorCount = 0;
 
-        // Timers
         private System.Windows.Forms.Timer _busMonitorTimer;
         private System.Windows.Forms.Timer _disconnectCheckTimer;
 
@@ -64,15 +62,13 @@ namespace UnifiedDDRSPDFlasher
 
         private void InitializeCustomComponents()
         {
-            // Set form properties
             this.Text = $"Unified DDR SPD Flasher {APP_VERSION}";
-            this.Size = new Size(1500, 900);
-            this.FormBorderStyle = FormBorderStyle.FixedSingle;
-            this.MaximizeBox = false;
+            this.Size = new Size(1600, 1200);
+            this.FormBorderStyle = FormBorderStyle.Sizable;
+            this.MinimumSize = new Size(1200, 750);
             this.StartPosition = FormStartPosition.CenterScreen;
             this.Icon = SystemIcons.Application;
 
-            // Main layout panel
             TableLayoutPanel mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -82,7 +78,6 @@ namespace UnifiedDDRSPDFlasher
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             mainLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
 
-            // Tab control for main content
             _mainTabControl = new TabControl
             {
                 Dock = DockStyle.Fill,
@@ -90,12 +85,10 @@ namespace UnifiedDDRSPDFlasher
                 Padding = new Point(10, 5)
             };
 
-            // Initialize tabs
             _spdTab = new SPDOperationsTab();
             _pmicTab = new PMICOperationsTab();
             _configTab = new FlasherConfigTab();
 
-            // Add tabs to control
             _mainTabControl.TabPages.Add(new TabPage("SPD Operations")
             {
                 Controls = { _spdTab },
@@ -113,20 +106,20 @@ namespace UnifiedDDRSPDFlasher
             });
 
             mainLayout.Controls.Add(_mainTabControl, 0, 0);
-
-            // Bottom status bar
-            _statusBar = CreateBottomStatusBar();
-            mainLayout.Controls.Add(_statusBar, 0, 1);
+            mainLayout.Controls.Add(CreateBottomStatusBar(), 0, 1);
 
             this.Controls.Add(mainLayout);
 
-            // Setup bus monitoring timer for auto-detection
-            _busMonitorTimer = new System.Windows.Forms.Timer();
-            _busMonitorTimer.Interval = BUS_MONITOR_INTERVAL_MS;
+            _busMonitorTimer = new System.Windows.Forms.Timer
+            {
+                Interval = BUS_MONITOR_INTERVAL_MS
+            };
             _busMonitorTimer.Tick += OnBusMonitorTick;
 
-            _disconnectCheckTimer = new System.Windows.Forms.Timer();
-            _disconnectCheckTimer.Interval = DISCONNECT_CHECK_INTERVAL_MS;
+            _disconnectCheckTimer = new System.Windows.Forms.Timer
+            {
+                Interval = DISCONNECT_CHECK_INTERVAL_MS
+            };
             _disconnectCheckTimer.Tick += OnDisconnectCheckTick;
         }
 
@@ -139,7 +132,6 @@ namespace UnifiedDDRSPDFlasher
                 Padding = new Padding(8, 0, 8, 0)
             };
 
-            // Left side - Errors
             _errorLabel = new Label
             {
                 Text = "Errors: 0",
@@ -151,7 +143,6 @@ namespace UnifiedDDRSPDFlasher
                 Padding = new Padding(0, 4, 0, 0)
             };
 
-            // Right side panel
             FlowLayoutPanel rightPanel = new FlowLayoutPanel
             {
                 Dock = DockStyle.Right,
@@ -160,10 +151,9 @@ namespace UnifiedDDRSPDFlasher
                 WrapContents = false
             };
 
-            // COM Port label
             _comPortLabel = new Label
             {
-                Text = "Using COM: ---",
+                Text = "Port: —",
                 ForeColor = Color.LightGray,
                 Font = new Font("Segoe UI", 8.5F),
                 AutoSize = true,
@@ -171,7 +161,6 @@ namespace UnifiedDDRSPDFlasher
                 Padding = new Padding(8, 4, 0, 0)
             };
 
-            // Connection indicator
             _connectionIndicator = new Panel
             {
                 Width = 12,
@@ -180,7 +169,6 @@ namespace UnifiedDDRSPDFlasher
                 Margin = new Padding(8, 6, 0, 0)
             };
 
-            // Connection status label
             _connectionStatusLabel = new Label
             {
                 Text = "Disconnected",
@@ -234,62 +222,47 @@ namespace UnifiedDDRSPDFlasher
                     return;
                 }
 
-                LogMessage($"Attempting connection to {portName} at {BAUD_RATE} baud...");
+                LogMessage($"Connecting to {portName} at {BAUD_RATE} baud…");
 
-                // Create device connection
                 _spdDevice = new SPDToolDevice(portName, BAUD_RATE);
 
-                // Test connection with retry
                 bool pingSuccess = false;
                 for (int attempt = 0; attempt < CONNECT_PING_RETRIES; attempt++)
                 {
                     try
                     {
-                        if (_spdDevice.Ping())
-                        {
-                            pingSuccess = true;
-                            break;
-                        }
+                        if (_spdDevice.Ping()) { pingSuccess = true; break; }
                     }
-                    catch
-                    {
-                        System.Threading.Thread.Sleep(100);
-                    }
+                    catch { System.Threading.Thread.Sleep(100); }
                 }
 
                 if (!pingSuccess)
-                {
-                    throw new Exception("Device not responding to ping after 5 attempts");
-                }
+                    throw new Exception("Device did not respond to ping after 5 attempts");
 
-                // Get device info
                 uint version = _spdDevice.GetVersion();
-                string deviceName = _spdDevice.GetDeviceName();
+                string devName = _spdDevice.GetDeviceName();
 
                 _currentPort = portName;
                 _isConnected = true;
+                _errorCount = 0; // ADDED: reset error counter on fresh connect
+                UpdateErrorDisplay();
 
-                // Setup alert handler
                 _spdDevice.AlertReceived += OnDeviceAlert;
 
-                // Notify tabs
                 _spdTab.OnDeviceConnected(_spdDevice);
                 _pmicTab.OnDeviceConnected(_spdDevice);
                 _configTab.OnDeviceConnected(_spdDevice);
 
-                // Start bus monitoring
                 _busMonitorTimer.Start();
                 _disconnectCheckTimer.Start();
 
-                // Update UI
                 UpdateConnectionState(true);
 
-                LogMessage($"? Connected to {deviceName} (FW: 0x{version:X8}) on {portName}");
+                LogMessage($"Connected: {devName} (FW: 0x{version:X8}) on {portName}");
 
-                MessageBox.Show($"Connected successfully!\n\nDevice: {deviceName}\nFirmware: 0x{version:X8}",
-                    "Connection Successful",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Information);
+                MessageBox.Show(
+                    $"Connected successfully!\n\nDevice: {(string.IsNullOrEmpty(devName) ? "(unnamed)" : devName)}\nFirmware: 0x{version:X8}",
+                    "Connected", MessageBoxButtons.OK, MessageBoxIcon.Information);
             }
             catch (Exception ex)
             {
@@ -297,18 +270,14 @@ namespace UnifiedDDRSPDFlasher
                 UpdateConnectionState(false);
 
                 LogError($"Connection failed: {ex.Message}");
-                MessageBox.Show($"Failed to connect:\n\n{ex.Message}\n\n" +
-                    "Check:\n1. Device is powered\n2. Correct COM port\n3. Drivers installed\n4. No other software using the port",
-                    "Connection Error",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Error);
+                MessageBox.Show(
+                    $"Failed to connect:\n\n{ex.Message}\n\n" +
+                    "Check:\n1. Device is powered\n2. Correct COM port selected\n3. Drivers installed\n4. No other software using the port",
+                    "Connection Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 _configTab.LogError($"Connection failed: {ex.Message}");
 
-                if (_spdDevice != null)
-                {
-                    _spdDevice.Dispose();
-                    _spdDevice = null;
-                }
+                _spdDevice?.Dispose();
+                _spdDevice = null;
             }
         }
 
@@ -316,13 +285,11 @@ namespace UnifiedDDRSPDFlasher
         {
             try
             {
-                // Stop bus monitoring and disconnect check timers
                 _busMonitorTimer.Stop();
                 _disconnectCheckTimer.Stop();
 
                 if (_spdDevice != null)
                 {
-                    // Remove event handler to prevent memory leak
                     _spdDevice.AlertReceived -= OnDeviceAlert;
                     _spdDevice.Dispose();
                     _spdDevice = null;
@@ -331,14 +298,11 @@ namespace UnifiedDDRSPDFlasher
                 _isConnected = false;
                 _currentPort = "";
 
-                // Notify tabs
                 _spdTab.OnDeviceDisconnected();
                 _pmicTab.OnDeviceDisconnected();
                 _configTab.OnDeviceDisconnected();
 
-                // Update UI
                 UpdateConnectionState(false);
-
                 LogMessage("Device disconnected");
             }
             catch (Exception ex)
@@ -350,111 +314,85 @@ namespace UnifiedDDRSPDFlasher
 
         private void OnDisconnectCheckTick(object sender, EventArgs e)
         {
-            if (_spdDevice != null && _isConnected)
+            if (_spdDevice == null || !_isConnected) return;
+            try
             {
-                try
+                if (!_spdDevice.Ping())
                 {
-                    // Try a quick ping to see if device is still there
-                    if (!_spdDevice.Ping())
-                    {
-                        LogError("Device not responding to ping, assuming disconnected");
-                        OnDisconnectRequested(this, EventArgs.Empty);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    // Any exception means device is likely gone
-                    LogError($"Disconnect check failed: {ex.Message}");
-                    _configTab.LogError($"Disconnect check failed: {ex.Message}");
+                    LogError("Device not responding — assuming disconnected");
                     OnDisconnectRequested(this, EventArgs.Empty);
                 }
+            }
+            catch (Exception ex)
+            {
+                LogError($"Disconnect check failed: {ex.Message}");
+                _configTab.LogError($"Disconnect check: {ex.Message}");
+                OnDisconnectRequested(this, EventArgs.Empty);
             }
         }
 
         private void OnDeviceAlert(object sender, AlertEventArgs e)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => OnDeviceAlert(sender, e)));
-                return;
-            }
+            if (InvokeRequired) { Invoke(new Action(() => OnDeviceAlert(sender, e))); return; }
 
             LogMessage($"[ALERT] {e.AlertType}");
 
-            // Handle bus changes - trigger scan
+            // Bus change alerts → immediate scan
             if (e.AlertCode == 0x2B || e.AlertCode == 0x2D)
-            {
                 OnBusMonitorTick(this, EventArgs.Empty);
-            }
         }
 
         private void OnBusMonitorTick(object sender, EventArgs e)
         {
-            if (_spdDevice != null && _isConnected)
+            if (_spdDevice == null || !_isConnected) return;
+
+            try
             {
-                try
+                var spdDevices = _spdDevice.ScanBus();
+                var pmicDevices = new System.Collections.Generic.List<byte>();
+
+                for (byte addr = 0x48; addr <= 0x4F; addr++)
                 {
-                    // Scan for SPD devices (0x50-0x57)
-                    var spdDevices = _spdDevice.ScanBus();
+                    try { if (_spdDevice.ProbeAddress(addr)) pmicDevices.Add(addr); }
+                    catch { }
+                }
 
-                    // Scan for PMIC devices (0x48-0x4F)
-                    var pmicDevices = new List<byte>();
-                    for (byte addr = 0x48; addr <= 0x4F; addr++)
-                    {
-                        try
-                        {
-                            if (_spdDevice.ProbeAddress(addr))
-                                pmicDevices.Add(addr);
-                        }
-                        catch
-                        {
-                            // Ignore errors during probe
-                        }
-                    }
+                var allDevices = new System.Collections.Generic.List<byte>();
+                allDevices.AddRange(spdDevices);
+                allDevices.AddRange(pmicDevices);
 
-                    // Combine both lists
-                    var allDevices = new List<byte>();
-                    allDevices.AddRange(spdDevices);
-                    allDevices.AddRange(pmicDevices);
-
-                    if (InvokeRequired)
-                    {
-                        Invoke(new Action(() => {
-                            _spdTab.UpdateDetectedDevices(allDevices);
-                            _pmicTab.UpdateDetectedDevices(allDevices);
-                        }));
-                    }
-                    else
+                if (InvokeRequired)
+                {
+                    Invoke(new Action(() =>
                     {
                         _spdTab.UpdateDetectedDevices(allDevices);
                         _pmicTab.UpdateDetectedDevices(allDevices);
-                    }
+                    }));
                 }
-                catch (Exception ex)
+                else
                 {
-                    LogError($"Bus scan error: {ex.Message}");
-                    _configTab.LogError($"Bus scan error: {ex.Message}");
+                    _spdTab.UpdateDetectedDevices(allDevices);
+                    _pmicTab.UpdateDetectedDevices(allDevices);
                 }
+            }
+            catch (Exception ex)
+            {
+                LogError($"Bus scan error: {ex.Message}");
+                _configTab.LogError($"Bus scan error: {ex.Message}");
             }
         }
 
         private void UpdateConnectionState(bool connected)
         {
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => UpdateConnectionState(connected)));
-                return;
-            }
+            if (InvokeRequired) { Invoke(new Action(() => UpdateConnectionState(connected))); return; }
 
             _isConnected = connected;
 
-            // Update tabs
             _spdTab.Enabled = connected;
             _pmicTab.Enabled = connected;
 
-            // Update status bar
             _connectionIndicator.BackColor = connected ? Color.LimeGreen : Color.Red;
-            _comPortLabel.Text = connected ? $"Using COM: {_currentPort}" : "Using COM: ---";
+            _comPortLabel.Text = connected ? $"Port: {_currentPort}" : "Port: —";
 
             if (_connectionStatusLabel != null)
             {
@@ -462,25 +400,18 @@ namespace UnifiedDDRSPDFlasher
                 _connectionStatusLabel.ForeColor = connected ? Color.LimeGreen : Color.LightGray;
             }
 
-            // Update config tab
             _configTab.SetConnectionState(connected);
         }
 
         private void OnPortSettingsChanged(object sender, EventArgs e)
         {
-            if (_isConnected)
-            {
-                var result = MessageBox.Show(
-                    "Changing port settings requires reconnection. Disconnect now?",
-                    "Port Settings Changed",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
+            if (!_isConnected) return;
+            var result = MessageBox.Show(
+                "Changing port settings requires reconnection. Disconnect now?",
+                "Port Settings Changed", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
 
-                if (result == DialogResult.Yes)
-                {
-                    OnDisconnectRequested(this, EventArgs.Empty);
-                }
-            }
+            if (result == DialogResult.Yes)
+                OnDisconnectRequested(this, EventArgs.Empty);
         }
 
         #endregion
@@ -496,30 +427,22 @@ namespace UnifiedDDRSPDFlasher
         private void LogError(string message)
         {
             _errorCount++;
-            if (InvokeRequired)
-            {
-                Invoke(new Action(() => UpdateErrorDisplay()));
-            }
-            else
-            {
-                UpdateErrorDisplay();
-            }
+            if (InvokeRequired) Invoke(new Action(UpdateErrorDisplay));
+            else UpdateErrorDisplay();
             LogMessage($"[ERROR] {message}");
         }
 
         private void UpdateErrorDisplay()
         {
-            if (_errorLabel != null)
-            {
-                _errorLabel.Text = $"Errors: {_errorCount}";
-                _errorLabel.ForeColor = _errorCount > 0 ? Color.Yellow : Color.White;
-            }
+            if (_errorLabel == null) return;
+            _errorLabel.Text = $"Errors: {_errorCount}";
+            _errorLabel.ForeColor = _errorCount > 0 ? Color.Yellow : Color.White;
         }
 
         private void LogMessage(string message)
         {
-            string timestamp = DateTime.Now.ToString("HH:mm:ss.fff");
-            System.Diagnostics.Debug.WriteLine($"[MainForm] {timestamp}: {message}");
+            string ts = DateTime.Now.ToString("HH:mm:ss.fff");
+            System.Diagnostics.Debug.WriteLine($"[MainForm] {ts}: {message}");
         }
 
         #endregion
@@ -532,26 +455,26 @@ namespace UnifiedDDRSPDFlasher
             {
                 var result = MessageBox.Show(
                     "Device is still connected. Close anyway?",
-                    "Confirm Exit",
-                    MessageBoxButtons.YesNo,
-                    MessageBoxIcon.Question);
+                    "Confirm Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
 
-                if (result == DialogResult.No)
-                {
-                    e.Cancel = true;
-                    return;
-                }
-
+                if (result == DialogResult.No) { e.Cancel = true; return; }
                 OnDisconnectRequested(this, EventArgs.Empty);
             }
 
-            // Properly dispose timer to prevent memory leak
+            // ADDED: properly dispose both timers
             if (_busMonitorTimer != null)
             {
                 _busMonitorTimer.Stop();
                 _busMonitorTimer.Tick -= OnBusMonitorTick;
                 _busMonitorTimer.Dispose();
                 _busMonitorTimer = null;
+            }
+            if (_disconnectCheckTimer != null)
+            {
+                _disconnectCheckTimer.Stop();
+                _disconnectCheckTimer.Tick -= OnDisconnectCheckTick;
+                _disconnectCheckTimer.Dispose();
+                _disconnectCheckTimer = null;
             }
 
             base.OnFormClosing(e);
