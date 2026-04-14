@@ -1,21 +1,22 @@
-﻿// ADDED: Minor fixes – auto-connect support wired from FlasherConfigTab Advanced menu,
-//        disconnect check timer properly disposed, error counter reset on connect.
+﻿// UPDATED v3.1: Auto-connect on startup via AppSettings (JSON), error counter reset on connect.
+//               disconnect check timer properly disposed, error counter reset on connect.
 using SPDTool;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.IO.Ports;
 using System.Windows.Forms;
 
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// Main form for the Unified DDR SPD Flasher – version 3.0
+    /// Main form for the Unified DDR SPD Flasher – version 3.1
     /// </summary>
     public class MainForm : Form
     {
         #region Constants
 
-        private const string APP_VERSION = "v3.0";
+        private const string APP_VERSION = "v3.1";
         private const int BUS_MONITOR_INTERVAL_MS = 500;
         private const int DISCONNECT_CHECK_INTERVAL_MS = 2000;
         private const int CONNECT_PING_RETRIES = 5;
@@ -44,6 +45,7 @@ namespace UnifiedDDRSPDFlasher
 
         private System.Windows.Forms.Timer _busMonitorTimer;
         private System.Windows.Forms.Timer _disconnectCheckTimer;
+        private System.Windows.Forms.Timer _autoConnectTimer;
 
         #endregion
 
@@ -51,9 +53,18 @@ namespace UnifiedDDRSPDFlasher
 
         public MainForm()
         {
+            AppSettings.Load();
             InitializeCustomComponents();
             SetupEventHandlers();
             UpdateConnectionState(false);
+
+            // Schedule auto-connect attempt after form is fully loaded
+            if (AppSettings.AutoConnect)
+            {
+                _autoConnectTimer = new System.Windows.Forms.Timer { Interval = 800 };
+                _autoConnectTimer.Tick += OnAutoConnectTimerTick;
+                _autoConnectTimer.Start();
+            }
         }
 
         #endregion
@@ -104,6 +115,9 @@ namespace UnifiedDDRSPDFlasher
                 Controls = { _configTab },
                 Padding = new Padding(3)
             });
+
+            // Start on the Flasher Configuration tab so users connect before doing anything
+            _mainTabControl.SelectedIndex = 2;
 
             mainLayout.Controls.Add(_mainTabControl, 0, 0);
             mainLayout.Controls.Add(CreateBottomStatusBar(), 0, 1);
@@ -206,6 +220,41 @@ namespace UnifiedDDRSPDFlasher
 
         #endregion
 
+        #region Auto-Connect
+
+        /// <summary>
+        /// Fires once after startup. If the remembered port is available, pre-selects it
+        /// and initiates a connection silently.
+        /// </summary>
+        private void OnAutoConnectTimerTick(object sender, EventArgs e)
+        {
+            _autoConnectTimer.Stop();
+            _autoConnectTimer.Dispose();
+            _autoConnectTimer = null;
+
+            string savedPort = AppSettings.LastPort;
+            if (string.IsNullOrEmpty(savedPort)) return;
+
+            // Check that the saved port is currently available
+            string[] available = SerialPort.GetPortNames();
+            bool portExists = Array.Exists(available, p =>
+                string.Equals(p, savedPort, StringComparison.OrdinalIgnoreCase));
+
+            if (!portExists)
+            {
+                LogMessage($"[AutoConnect] Saved port {savedPort} not available – skipping.");
+                return;
+            }
+
+            LogMessage($"[AutoConnect] Attempting connection to remembered port {savedPort}…");
+
+            // Pre-select the port in the config tab and trigger connection
+            _configTab.SelectPort(savedPort);
+            OnConnectRequested(this, EventArgs.Empty);
+        }
+
+        #endregion
+
         #region Connection Management
 
         private void OnConnectRequested(object sender, EventArgs e)
@@ -244,8 +293,12 @@ namespace UnifiedDDRSPDFlasher
 
                 _currentPort = portName;
                 _isConnected = true;
-                _errorCount = 0; // ADDED: reset error counter on fresh connect
+                _errorCount = 0;
                 UpdateErrorDisplay();
+
+                // Persist the successfully-used port for next startup auto-connect
+                AppSettings.LastPort = portName;
+                AppSettings.Save();
 
                 _spdDevice.AlertReceived += OnDeviceAlert;
 
@@ -461,7 +514,7 @@ namespace UnifiedDDRSPDFlasher
                 OnDisconnectRequested(this, EventArgs.Empty);
             }
 
-            // ADDED: properly dispose both timers
+            // Properly dispose all timers
             if (_busMonitorTimer != null)
             {
                 _busMonitorTimer.Stop();
@@ -475,6 +528,12 @@ namespace UnifiedDDRSPDFlasher
                 _disconnectCheckTimer.Tick -= OnDisconnectCheckTick;
                 _disconnectCheckTimer.Dispose();
                 _disconnectCheckTimer = null;
+            }
+            if (_autoConnectTimer != null)
+            {
+                _autoConnectTimer.Stop();
+                _autoConnectTimer.Dispose();
+                _autoConnectTimer = null;
             }
 
             base.OnFormClosing(e);

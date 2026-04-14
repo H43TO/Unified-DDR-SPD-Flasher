@@ -11,9 +11,9 @@ using System.Threading.Tasks;
 namespace SPDTool
 {
     /// <summary>
-    /// Communication library for the RP2040‑based SPD programmer – version 3.8.4
+    /// Communication library for the RP2040‑based SPD programmer – version 3.8.5
     /// Provides read/write access to SPD EEPROMs (DDR3/4/5) and PMIC registers.
-    /// Firmware version expected:  20260307
+    /// Firmware version expected:  20260308
     ///
     /// <para><b>Thread safety:</b> All serial I/O is guarded by <c>_serialLock</c>.
     /// Public methods may be called from worker threads; UI callbacks should marshal

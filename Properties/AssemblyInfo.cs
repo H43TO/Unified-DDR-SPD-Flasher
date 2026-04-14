@@ -6,11 +6,11 @@ using System.Runtime.InteropServices;
 // General Information about an assembly is controlled through the following
 // set of attributes. Change these attribute values to modify the information
 // associated with an assembly.
-[assembly: AssemblyTitle("Unified-DDR-SPD-Flasher")]
+[assembly: AssemblyTitle("Unified-DDR-Flasher")]
 [assembly: AssemblyDescription("A program meant to interface with the Unified DDR Flasher")]
 [assembly: AssemblyConfiguration("")]
 [assembly: AssemblyCompany("H43TO")]
-[assembly: AssemblyProduct("Unified-DDR-SPD-Flasher")]
+[assembly: AssemblyProduct("Unified-DDR-Flasher")]
 [assembly: AssemblyCopyright("Copyright ©  2026")]
 [assembly: AssemblyTrademark("")]
 [assembly: AssemblyCulture("")]

@@ -1,6 +1,7 @@
-﻿// ADDED: Live COM-port refresh (no manual Refresh button needed), device name & FW version
-//        moved into Connection group, "Set Device Name" / "Factory Reset" / "Auto-connect"
-//        moved to Advanced menu, full Manual Pin Control panel in Advanced dialog.
+﻿// UPDATED v3.1:
+//  - I2C bus speed selection moved from main tab into AdvancedConfigDialog (ComboBox).
+//  - Auto-Connect is now a checkbox in AdvancedConfigDialog backed by AppSettings (JSON).
+//  - Live COM-port refresh retained; I2C radio buttons and "Apply I2C Settings" removed from main UI.
 using System;
 using System.Drawing;
 using System.IO.Ports;
@@ -11,10 +12,9 @@ using SPDTool;
 namespace UnifiedDDRSPDFlasher
 {
     /// <summary>
-    /// Flasher Configuration Tab – version 3.0
-    /// Redesigned UI: Connection group now includes FW version and device name readout.
-    /// Advanced menu exposes: Set Device Name, Factory Reset, Auto-Connect, Manual Pin Control.
-    /// COM port list refreshes automatically via a timer.
+    /// Flasher Configuration Tab – version 3.1
+    /// Main tab: Connection group (port, connect, disconnect, FW info, device name) + Error log.
+    /// Advanced dialog: Set Device Name, Factory Reset, Auto-Connect checkbox, I2C speed, Manual Pin Control.
     /// </summary>
     public class FlasherConfigTab : UserControl
     {
@@ -47,12 +47,6 @@ namespace UnifiedDDRSPDFlasher
         private Button _advancedButton;
         private Label _firmwareLabel;
         private Label _deviceNameLabel;
-
-        // I2C Settings
-        private RadioButton _i2c100Radio;
-        private RadioButton _i2c400Radio;
-        private RadioButton _i2c1MRadio;
-        private Button _applyI2CButton;
 
         // Error log
         private RichTextBox _errorLogText;
@@ -91,7 +85,7 @@ namespace UnifiedDDRSPDFlasher
             this.Dock = DockStyle.Fill;
             this.BackColor = Color.FromArgb(240, 240, 240);
 
-            // Main layout: 2 columns
+            // Main layout: 2 columns – left (error log + connection), right (info / hints)
             TableLayoutPanel mainLayout = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -102,7 +96,7 @@ namespace UnifiedDDRSPDFlasher
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 42F));
             mainLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 58F));
 
-            // Left: Error log + Connection
+            // Left column
             TableLayoutPanel leftCol = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
@@ -114,16 +108,8 @@ namespace UnifiedDDRSPDFlasher
             leftCol.Controls.Add(CreateConnectionGroup(), 0, 1);
             mainLayout.Controls.Add(leftCol, 0, 0);
 
-            // Right: I2C settings only (Device group merged into Connection)
-            TableLayoutPanel rightCol = new TableLayoutPanel
-            {
-                Dock = DockStyle.Fill,
-                RowCount = 1,
-                Padding = new Padding(3)
-            };
-            rightCol.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            rightCol.Controls.Add(CreateI2CGroup(), 0, 0);
-            mainLayout.Controls.Add(rightCol, 1, 0);
+            // Right column: hints / info panel
+            mainLayout.Controls.Add(CreateInfoPanel(), 1, 0);
 
             this.Controls.Add(mainLayout);
         }
@@ -170,13 +156,12 @@ namespace UnifiedDDRSPDFlasher
             };
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F)); // label
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F)); // combo
-            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F)); // buttons
+            layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 36F)); // connect + advanced
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F)); // disconnect
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 10F)); // spacer
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 22F)); // fw label
             layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F)); // device name
 
-            // COM Port label
             var portLabel = new Label
             {
                 Text = "COM Port:  (auto-refreshed)",
@@ -233,7 +218,7 @@ namespace UnifiedDDRSPDFlasher
             };
             _advancedButton.FlatAppearance.BorderColor = Color.Silver;
             _advancedButton.Click += OnAdvancedClicked;
-            _toolTip.SetToolTip(_advancedButton, "Device name, factory reset, auto-connect, pin control.");
+            _toolTip.SetToolTip(_advancedButton, "Device name, factory reset, auto-connect, I2C speed, pin control.");
 
             buttonRow.Controls.Add(_connectButton, 0, 0);
             buttonRow.Controls.Add(_advancedButton, 1, 0);
@@ -258,7 +243,6 @@ namespace UnifiedDDRSPDFlasher
             // Spacer
             layout.Controls.Add(new Panel(), 0, 4);
 
-            // Firmware version (read-only, shown after connect)
             _firmwareLabel = new Label
             {
                 Text = "Firmware: —",
@@ -283,64 +267,102 @@ namespace UnifiedDDRSPDFlasher
             return group;
         }
 
-        private GroupBox CreateI2CGroup()
+        /// <summary>Right-hand guide panel.</summary>
+        private GroupBox CreateInfoPanel()
         {
-            GroupBox group = new GroupBox
+            var group = new GroupBox
             {
-                Text = "I2C Bus Settings",
+                Text = "Getting Started Guide",
                 Dock = DockStyle.Fill,
                 Font = new Font("Segoe UI", 9.5F, FontStyle.Bold),
-                Padding = new Padding(12),
-                Enabled = false,
+                Padding = new Padding(10),
                 ForeColor = Color.FromArgb(0, 78, 152)
             };
 
-            TableLayoutPanel layout = new TableLayoutPanel
+            // Use a RichTextBox so we can apply bold + normal formatting easily
+            var rtb = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                RowCount = 5,
-                Padding = new Padding(8)
-            };
-
-            var clockLabel = new Label
-            {
-                Text = "I2C Clock Speed:",
-                Dock = DockStyle.Fill,
+                ReadOnly = true,
+                BackColor = Color.FromArgb(240, 240, 240),
+                BorderStyle = BorderStyle.None,
                 Font = new Font("Segoe UI", 9F),
-                TextAlign = ContentAlignment.MiddleLeft,
-                Height = 24
+                ForeColor = Color.FromArgb(40, 40, 40),
+                ScrollBars = RichTextBoxScrollBars.Vertical
             };
-            layout.Controls.Add(clockLabel, 0, 0);
 
-            _i2c100Radio = new RadioButton { Text = "100 kHz  (Standard – safest)", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9F), Checked = true, Height = 24 };
-            _i2c400Radio = new RadioButton { Text = "400 kHz  (Fast)", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9F), Height = 24 };
-            _i2c1MRadio = new RadioButton { Text = "1 MHz    (Fast-Plus – DDR5 recommended)", Dock = DockStyle.Fill, Font = new Font("Segoe UI", 9F), Height = 24 };
-
-            _toolTip.SetToolTip(_i2c100Radio, "Standard mode. Use when signal integrity is a concern.");
-            _toolTip.SetToolTip(_i2c400Radio, "Fast mode. Compatible with most DIMM SPD devices.");
-            _toolTip.SetToolTip(_i2c1MRadio, "Fast-Plus mode. Required by JEDEC DDR5 SPD spec for fast page reads.");
-
-            layout.Controls.Add(_i2c100Radio, 0, 1);
-            layout.Controls.Add(_i2c400Radio, 0, 2);
-            layout.Controls.Add(_i2c1MRadio, 0, 3);
-
-            _applyI2CButton = new Button
+            // Helper to append a bold heading line
+            void H(string text)
             {
-                Text = "Apply I2C Settings",
-                Dock = DockStyle.Fill,
-                Font = new Font("Segoe UI", 9F),
-                BackColor = Color.FromArgb(0, 120, 215),
-                ForeColor = Color.White,
-                FlatStyle = FlatStyle.Flat,
-                Height = 32,
-                Margin = new Padding(0, 10, 0, 0)
-            };
-            _applyI2CButton.FlatAppearance.BorderSize = 0;
-            _applyI2CButton.Click += OnApplyI2CClicked;
-            _toolTip.SetToolTip(_applyI2CButton, "Send the selected I2C clock mode to the programmer firmware.");
-            layout.Controls.Add(_applyI2CButton, 0, 4);
+                rtb.SelectionFont = new Font("Segoe UI", 9.5F, FontStyle.Bold);
+                rtb.SelectionColor = Color.FromArgb(0, 78, 152);
+                rtb.AppendText(text + "\n");
+            }
+            // Helper to append a normal body line
+            void B(string text)
+            {
+                rtb.SelectionFont = new Font("Segoe UI", 9F, FontStyle.Regular);
+                rtb.SelectionColor = Color.FromArgb(40, 40, 40);
+                rtb.AppendText(text + "\n");
+            }
+            void Sep() { B(""); }
 
-            group.Controls.Add(layout);
+            H("① Connect the Programmer");
+            B("Plug the RP2040-based programmer into a USB port.");
+            B("Windows will install the CDC serial driver automatically.");
+            B("The COM port appears in the dropdown (auto-refreshed).");
+            Sep();
+
+            H("② Select COM Port & Connect");
+            B("Pick the correct COM port from the dropdown on the left.");
+            B("Click Connect. The firmware version and device name");
+            B("will appear below the buttons on a successful connection.");
+            Sep();
+
+            H("③ SPD Operations Tab");
+            B("• Read SPD – reads all bytes from the selected DIMM.");
+            B("• Open Dump – loads a .bin file (works without a device).");
+            B("• Parsed Fields – module type, capacity, speed, timings,");
+            B("  CAS latencies, and manufacturer decoded automatically.");
+            B("• CRC status shown after every read or open (✓ OK / ✗ FAIL).");
+            B("• Recalc CRC – fixes CRC bytes in the in-memory dump.");
+            B("• Write All – writes the loaded dump back to the DIMM.");
+            Sep();
+
+            H("④ PMIC Operations Tab");
+            B("• Detects PMIC automatically after connection.");
+            B("• Read PMIC – reads all 256 registers into the hex viewer.");
+            B("• Live measurements update every second (SWA/B/C, VIN, LDO).");
+            B("• Burn – writes vendor blocks (0x40-0x6F) or a full dump.");
+            B("• Unlock Vendor before burning; the default JEDEC password");
+            B("  (0x73 / 0x94) is used unless a custom one is saved.");
+            Sep();
+
+            H("⑤ Advanced Settings (click Advanced… when connected)");
+            B("• Set a custom device name (stored in programmer EEPROM).");
+            B("• Change I2C bus speed: 100 kHz / 400 kHz / 1 MHz.");
+            B("  DDR5 works best at 1 MHz. DDR4 is safe at 400 kHz.");
+            B("• Auto-Connect: remembers the last successful COM port");
+            B("  and reconnects automatically on next application launch.");
+            B("• Factory Reset clears all settings from programmer EEPROM.");
+            B("• Manual Pin Control lets you toggle individual GPIO lines");
+            B("  (HV converter, SA1, VIN_CTRL, PMIC_CTRL, etc.).");
+            Sep();
+
+            H("⑥ I2C Speed Reference");
+            B("  100 kHz  Standard – use for unknown / older devices.");
+            B("  400 kHz  Fast – compatible with all DDR4 SPD EEPROMs.");
+            B("  1 MHz    Fast-Plus – required by JEDEC DDR5 spec.");
+            Sep();
+
+            H("Troubleshooting");
+            B("• No ports in list → check USB cable and driver.");
+            B("• Ping fails → device may need a power cycle.");
+            B("• SPD read error → try a lower I2C speed.");
+            B("• PMIC not detected → check VIN_CTRL pin and power.");
+
+            rtb.SelectionStart = 0;
+            group.Controls.Add(rtb);
             return group;
         }
 
@@ -364,6 +386,16 @@ namespace UnifiedDDRSPDFlasher
         public string GetSelectedPort() => _portCombo.SelectedItem?.ToString() ?? "";
         public int GetBaudRate() => DEFAULT_BAUD_RATE;
 
+        /// <summary>
+        /// Programmatically selects a port in the dropdown (used for auto-connect).
+        /// </summary>
+        public void SelectPort(string portName)
+        {
+            if (InvokeRequired) { Invoke(new Action(() => SelectPort(portName))); return; }
+            int idx = _portCombo.FindStringExact(portName);
+            if (idx >= 0) _portCombo.SelectedIndex = idx;
+        }
+
         public void RefreshPorts() => LoadPorts();
 
         public void SetConnectionState(bool connected)
@@ -385,10 +417,6 @@ namespace UnifiedDDRSPDFlasher
                 _disconnectButton.BackColor = Color.FromArgb(200, 200, 200);
                 _disconnectButton.ForeColor = Color.Black;
             }
-
-            // Enable I2C group when connected
-            var i2cParent = _applyI2CButton.Parent?.Parent as GroupBox;
-            if (i2cParent != null) i2cParent.Enabled = connected;
         }
 
         public void OnDeviceConnected(SPDToolDevice device)
@@ -402,11 +430,6 @@ namespace UnifiedDDRSPDFlasher
 
                 string devName = device.GetDeviceName();
                 _deviceNameLabel.Text = $"Device: {(string.IsNullOrEmpty(devName) ? "(unnamed)" : devName)}";
-
-                byte clockMode = device.GetI2CClockMode();
-                if (clockMode == 0) _i2c100Radio.Checked = true;
-                else if (clockMode == 1) _i2c400Radio.Checked = true;
-                else _i2c1MRadio.Checked = true;
             }
             catch (Exception ex)
             {
@@ -426,7 +449,6 @@ namespace UnifiedDDRSPDFlasher
 
         #region Event Handlers
 
-        // Live port refresh – silently update list only when ports change
         private void OnPortRefreshTick(object sender, EventArgs e)
         {
             if (_isConnected) return;
@@ -461,28 +483,6 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        private void OnApplyI2CClicked(object sender, EventArgs e)
-        {
-            if (Device == null) return;
-            try
-            {
-                byte mode = _i2c100Radio.Checked ? (byte)0 : (_i2c400Radio.Checked ? (byte)1 : (byte)2);
-                string[] names = { "100 kHz", "400 kHz", "1 MHz" };
-
-                if (Device.SetI2CClockMode(mode))
-                    LogError($"[INFO] I2C clock set to {names[mode]}");
-                else
-                    LogError($"[ERROR] Failed to set I2C clock to {names[mode]}");
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show($"Error setting I2C clock:\n\n{ex.Message}", "Error",
-                    MessageBoxButtons.OK, MessageBoxIcon.Error);
-                ErrorOccurred?.Invoke(this, $"Setting I2C clock failed: {ex.Message}");
-            }
-        }
-
-        // ADDED: Advanced menu button
         private void OnAdvancedClicked(object sender, EventArgs e)
         {
             using var dlg = new AdvancedConfigDialog(Device, _deviceProvider,
@@ -501,12 +501,13 @@ namespace UnifiedDDRSPDFlasher
     }
 
     // ═════════════════════════════════════════════════════════════════════════
-    // ADDED: Advanced Configuration Dialog
+    // Advanced Configuration Dialog – v3.1
+    // Contains: Device Name, Factory Reset, Auto-Connect, I2C Speed, Pin Control
     // ═════════════════════════════════════════════════════════════════════════
 
     /// <summary>
     /// Advanced programmer options:
-    /// – Set Device Name  – Factory Reset  – Auto-Connect  – Manual Pin Control
+    /// – Set Device Name  – Factory Reset  – Auto-Connect checkbox  – I2C Speed  – Manual Pin Control
     /// </summary>
     internal sealed class AdvancedConfigDialog : Form
     {
@@ -517,11 +518,21 @@ namespace UnifiedDDRSPDFlasher
         private readonly FlasherConfigTab _parent;
 
         private TextBox _nameText;
+        private ComboBox _i2cSpeedCombo;
+        private CheckBox _autoConnectCheck;
 
         // Pin readout labels (updated by timer)
         private Label[] _pinStateLabels;
         private System.Windows.Forms.Timer _pinRefreshTimer;
         private const int AUTO_CONNECT_DELAY_MS = 500;
+
+        private static readonly string[] I2CSpeedLabels =
+        {
+            "100 kHz  (Standard – safest)",
+            "400 kHz  (Fast)",
+            "1 MHz    (Fast-Plus – DDR5 recommended)"
+        };
+
         private static readonly (string name, byte id, string tip)[] PinDefs =
         {
             ("HV Switch",     SPDToolDevice.PIN_HV_SWITCH,      "Opto-coupler that enables ~9 V HV programming for DDR3/4."),
@@ -549,7 +560,7 @@ namespace UnifiedDDRSPDFlasher
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
-            Size = new Size(560, 600);
+            Size = new Size(580, 680);
             BackColor = Color.FromArgb(240, 240, 240);
 
             BuildUI();
@@ -566,14 +577,15 @@ namespace UnifiedDDRSPDFlasher
             var main = new TableLayoutPanel
             {
                 Dock = DockStyle.Fill,
-                RowCount = 4,
+                RowCount = 5,
                 ColumnCount = 1,
                 Padding = new Padding(14)
             };
-            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 90F));
-            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 80F));
-            main.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
-            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));
+            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 80F));   // Device Name
+            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 90F));   // Programmer Options + Auto-Connect
+            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 80F));   // I2C Speed
+            main.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));   // Pin Control
+            main.RowStyles.Add(new RowStyle(SizeType.Absolute, 44F));   // Close
 
             // ── Device Name ──────────────────────────────────────────────────
             GroupBox nameGroup = new GroupBox
@@ -609,7 +621,7 @@ namespace UnifiedDDRSPDFlasher
             nameGroup.Controls.Add(nameFlow);
             main.Controls.Add(nameGroup, 0, 0);
 
-            // ── Factory Reset + Auto-connect ─────────────────────────────────
+            // ── Programmer Options (Factory Reset + Auto-Connect) ────────────
             GroupBox miscGroup = new GroupBox
             {
                 Text = "Programmer Options",
@@ -619,7 +631,16 @@ namespace UnifiedDDRSPDFlasher
                 ForeColor = Color.FromArgb(0, 78, 152)
             };
 
-            var miscFlow = new FlowLayoutPanel { Dock = DockStyle.Fill };
+            var miscLayout = new TableLayoutPanel
+            {
+                Dock = DockStyle.Fill,
+                RowCount = 2,
+                Padding = new Padding(2)
+            };
+            miscLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+            miscLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+            var miscFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
 
             var factoryBtn = new Button
             {
@@ -636,20 +657,79 @@ namespace UnifiedDDRSPDFlasher
             factoryBtn.FlatAppearance.BorderSize = 0;
             factoryBtn.Click += OnFactoryResetClicked;
 
-            var autoBtn = new Button
-            {
-                Text = "Auto-Connect",
-                Width = 130,
-                Height = 28,
-                Font = new Font("Segoe UI", 9F),
-                Margin = new Padding(0)
-            };
-            autoBtn.Click += OnAutoConnectClicked;
-
             miscFlow.Controls.Add(factoryBtn);
-            miscFlow.Controls.Add(autoBtn);
-            miscGroup.Controls.Add(miscFlow);
+            miscLayout.Controls.Add(miscFlow, 0, 0);
+
+            // Auto-connect checkbox (backed by AppSettings JSON file)
+            _autoConnectCheck = new CheckBox
+            {
+                Text = "Auto-Connect to last used port on startup",
+                Font = new Font("Segoe UI", 9F),
+                AutoSize = true,
+                Checked = AppSettings.AutoConnect,
+                Margin = new Padding(2, 4, 0, 0)
+            };
+            _autoConnectCheck.CheckedChanged += (s, e) =>
+            {
+                AppSettings.AutoConnect = _autoConnectCheck.Checked;
+                AppSettings.Save();
+            };
+            miscLayout.Controls.Add(_autoConnectCheck, 0, 1);
+
+            miscGroup.Controls.Add(miscLayout);
             main.Controls.Add(miscGroup, 0, 1);
+
+            // ── I2C Speed ────────────────────────────────────────────────────
+            GroupBox i2cGroup = new GroupBox
+            {
+                Text = "I2C Bus Speed",
+                Dock = DockStyle.Fill,
+                Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+                Padding = new Padding(8),
+                ForeColor = Color.FromArgb(0, 78, 152)
+            };
+
+            var i2cFlow = new FlowLayoutPanel { Dock = DockStyle.Fill, WrapContents = false };
+
+            _i2cSpeedCombo = new ComboBox
+            {
+                DropDownStyle = ComboBoxStyle.DropDownList,
+                Font = new Font("Segoe UI", 9F),
+                Width = 300,
+                Enabled = _device != null
+            };
+            _i2cSpeedCombo.Items.AddRange(I2CSpeedLabels);
+
+            // Pre-select current device speed if connected
+            if (_device != null)
+            {
+                try
+                {
+                    byte mode = _device.GetI2CClockMode();
+                    _i2cSpeedCombo.SelectedIndex = Math.Min(mode, (byte)2);
+                }
+                catch { _i2cSpeedCombo.SelectedIndex = 0; }
+            }
+            else
+            {
+                _i2cSpeedCombo.SelectedIndex = 0;
+            }
+
+            var applyI2cBtn = new Button
+            {
+                Text = "Apply",
+                Width = 80,
+                Height = 26,
+                Font = new Font("Segoe UI", 8.5F),
+                Margin = new Padding(8, 0, 0, 0),
+                Enabled = _device != null
+            };
+            applyI2cBtn.Click += OnApplyI2CClicked;
+
+            i2cFlow.Controls.Add(_i2cSpeedCombo);
+            i2cFlow.Controls.Add(applyI2cBtn);
+            i2cGroup.Controls.Add(i2cFlow);
+            main.Controls.Add(i2cGroup, 0, 2);
 
             // ── Manual Pin Control ────────────────────────────────────────────
             GroupBox pinGroup = new GroupBox
@@ -668,10 +748,10 @@ namespace UnifiedDDRSPDFlasher
                 ColumnCount = 4,
                 AutoScroll = true
             };
-            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F)); // name
-            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54F));  // state
-            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72F));  // set hi
-            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F)); // set lo
+            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 110F));
+            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 54F));
+            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 72F));
+            pinTable.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
 
             _pinStateLabels = new Label[PinDefs.Length];
 
@@ -738,7 +818,6 @@ namespace UnifiedDDRSPDFlasher
                 pinTable.Controls.Add(loBtn, 3, i);
             }
 
-            // Reset all button at bottom of pin group
             var resetAllBtn = new Button
             {
                 Text = "Reset All Pins to Default",
@@ -757,7 +836,7 @@ namespace UnifiedDDRSPDFlasher
             pinPanelWrapper.Controls.Add(pinTable);
             pinPanelWrapper.Controls.Add(resetAllBtn);
             pinGroup.Controls.Add(pinPanelWrapper);
-            main.Controls.Add(pinGroup, 0, 2);
+            main.Controls.Add(pinGroup, 0, 3);
 
             // ── Close ─────────────────────────────────────────────────────────
             var closeFlow = new FlowLayoutPanel
@@ -776,7 +855,7 @@ namespace UnifiedDDRSPDFlasher
             };
             closeBtn.Click += (s, e) => Close();
             closeFlow.Controls.Add(closeBtn);
-            main.Controls.Add(closeFlow, 0, 3);
+            main.Controls.Add(closeFlow, 0, 4);
 
             this.Controls.Add(main);
         }
@@ -811,6 +890,26 @@ namespace UnifiedDDRSPDFlasher
                     _pinStateLabels[i].Text = "—";
                     _pinStateLabels[i].ForeColor = Color.Gray;
                 }
+            }
+        }
+
+        private void OnApplyI2CClicked(object sender, EventArgs e)
+        {
+            if (_device == null) return;
+            try
+            {
+                byte mode = (byte)Math.Max(0, Math.Min(2, _i2cSpeedCombo.SelectedIndex));
+                if (_device.SetI2CClockMode(mode))
+                    MessageBox.Show($"I2C clock set to {I2CSpeedLabels[mode]}.", "Applied",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                else
+                    MessageBox.Show($"Failed to set I2C clock.", "Error",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Error setting I2C clock:\n\n{ex.Message}", "Error",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
         }
 
@@ -868,29 +967,6 @@ namespace UnifiedDDRSPDFlasher
             {
                 MessageBox.Show($"Error: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
-        }
-
-        private void OnAutoConnectClicked(object sender, EventArgs e)
-        {
-            // Cycle through available ports and attempt a connection
-            string[] ports = SerialPort.GetPortNames();
-            if (ports.Length == 0)
-            {
-                MessageBox.Show("No COM ports found.", "Auto-Connect",
-                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
-                return;
-            }
-
-            // If already connected, disconnect first
-            if (_device != null)
-                _disconnectHandler?.Invoke(_parent, EventArgs.Empty);
-
-            Thread.Sleep(AUTO_CONNECT_DELAY_MS);
-
-            // Raise ConnectionRequested for each port until one works (MainForm will handle it)
-            // We simply raise with the default port selection; MainForm handles the logic.
-            _connectHandler?.Invoke(_parent, EventArgs.Empty);
-            Close();
         }
     }
 }
