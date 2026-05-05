@@ -1,4 +1,4 @@
-﻿// UPDATED v3.1:
+// UPDATED v3.1:
 //  - I2C bus speed selection moved from main tab into AdvancedConfigDialog (ComboBox).
 //  - Auto-Connect is now a checkbox in AdvancedConfigDialog backed by AppSettings (JSON).
 //  - Live COM-port refresh retained; I2C radio buttons and "Apply I2C Settings" removed from main UI.
@@ -7,9 +7,9 @@ using System.Drawing;
 using System.IO.Ports;
 using System.Threading;
 using System.Windows.Forms;
-using SPDTool;
+using UDFCore;
 
-namespace UnifiedDDRSPDFlasher
+namespace UnifiedDDRFlasher
 {
     /// <summary>
     /// Flasher Configuration Tab – version 3.1
@@ -36,8 +36,8 @@ namespace UnifiedDDRSPDFlasher
 
         #region Private Fields
 
-        private Func<SPDToolDevice> _deviceProvider;
-        private SPDToolDevice Device => _deviceProvider?.Invoke();
+        private Func<UDFDevice> _deviceProvider;
+        private UDFDevice Device => _deviceProvider?.Invoke();
         private bool _isConnected = false;
 
         // Connection controls
@@ -307,59 +307,86 @@ namespace UnifiedDDRSPDFlasher
             }
             void Sep() { B(""); }
 
-            H("① Connect the Programmer");
-            B("Plug the RP2040-based programmer into a USB port.");
-            B("Windows will install the CDC serial driver automatically.");
-            B("The COM port appears in the dropdown (auto-refreshed).");
+            H("① Plug In & Pick the Port");
+            B("Connect the RP2040 programmer over USB. Windows installs");
+            B("the CDC driver automatically; the COM port appears in the");
+            B("dropdown on the left within a second or two.");
+            B("Pick it from the list, then click Connect. On success the");
+            B("status bar at the bottom of the window turns green and");
+            B("shows the firmware version next to the device name.");
             Sep();
 
-            H("② Select COM Port & Connect");
-            B("Pick the correct COM port from the dropdown on the left.");
-            B("Click Connect. The firmware version and device name");
-            B("will appear below the buttons on a successful connection.");
+            H("② Read an SPD");
+            B("Switch to the SPD Operations tab. Detected modules are");
+            B("listed in the address dropdown (typically 0x50–0x57).");
+            B("Pick one and click Read SPD - the hex viewer fills in,");
+            B("and the Module Info box on the right immediately shows:");
+            B("  • Detected generation (DDR4 / DDR5) and SPD size");
+            B("  • Speed grade (e.g. DDR5-6400)");
+            B("  • Total module capacity");
+            B("  • Bus / IO width");
+            B("  • CRC status (green OK, red FAIL)");
+            B("That's the at-a-glance summary. For the full JEDEC field");
+            B("breakdown - all timings in nCK + ps, CAS latencies,");
+            B("manufacturer/PN, etc. - click \"Parsed Fields...\". A");
+            B("popup window opens with the complete decode and a");
+            B("\"Recalc & Fix CRC\" button.");
             Sep();
 
-            H("③ SPD Operations Tab");
-            B("• Read SPD – reads all bytes from the selected DIMM.");
-            B("• Open Dump – loads a .bin file (works without a device).");
-            B("• Parsed Fields – module type, capacity, speed, timings,");
-            B("  CAS latencies, and manufacturer decoded automatically.");
-            B("• CRC status shown after every read or open (✓ OK / ✗ FAIL).");
-            B("• Recalc CRC – fixes CRC bytes in the in-memory dump.");
-            B("• Write All – writes the loaded dump back to the DIMM.");
+            H("③ Save, Edit, Write");
+            B("• Save Dump   - writes the loaded bytes to a .bin file.");
+            B("• Open Dump   - loads a .bin from disk (works offline);");
+            B("                Module Info refills from the loaded data.");
+            B("• Verify      - reads from the DIMM and diffs against the");
+            B("                in-memory dump.");
+            B("• Write All   - pushes the dump to the DIMM. RSWP is");
+            B("                cleared automatically on DDR5, HV is");
+            B("                applied automatically on DDR4.");
+            B("If you've edited timings by hand, the CRC will go red.");
+            B("Open Parsed Fields, click Recalc & Fix CRC, then Write");
+            B("All - the patch is in-memory until you write.");
             Sep();
 
-            H("④ PMIC Operations Tab");
-            B("• Detects PMIC automatically after connection.");
-            B("• Read PMIC – reads all 256 registers into the hex viewer.");
-            B("• Live measurements update every second (SWA/B/C, VIN, LDO).");
-            B("• Burn – writes vendor blocks (0x40-0x6F) or a full dump.");
-            B("• Unlock Vendor before burning; the default JEDEC password");
-            B("  (0x73 / 0x94) is used unless a custom one is saved.");
+            H("④ PMIC (DDR5 only)");
+            B("PMICs at 0x48–0x4F auto-detect on connect. The PMIC tab");
+            B("shows live SWA/SWB/SWC voltages, VIN, LDO outputs, and");
+            B("currents (1 Hz refresh). Read All Registers dumps all");
+            B("256 bytes; Burn writes vendor MTP blocks (irreversible -");
+            B("prompts for confirmation). Unlock first; the JEDEC");
+            B("default password (0x73 / 0x94) is used unless you've");
+            B("saved a custom one for that PMIC type.");
             Sep();
 
-            H("⑤ Advanced Settings (click Advanced… when connected)");
-            B("• Set a custom device name (stored in programmer EEPROM).");
-            B("• Change I2C bus speed: 100 kHz / 400 kHz / 1 MHz.");
-            B("  DDR5 works best at 1 MHz. DDR4 is safe at 400 kHz.");
-            B("• Auto-Connect: remembers the last successful COM port");
-            B("  and reconnects automatically on next application launch.");
-            B("• Factory Reset clears all settings from programmer EEPROM.");
-            B("• Manual Pin Control lets you toggle individual GPIO lines");
-            B("  (HV converter, SA1, VIN_CTRL, PMIC_CTRL, etc.).");
+            H("⑤ Advanced Settings");
+            B("Click Advanced… (only enabled while connected) for:");
+            B("  • Custom device name (saved to programmer EEPROM).");
+            B("  • I2C bus speed: 100 kHz / 400 kHz / 1 MHz.");
+            B("    DDR5 needs 1 MHz; DDR4 is reliable at 400 kHz.");
+            B("  • Auto-Connect on launch (remembers last COM port).");
+            B("  • Factory Reset clears EEPROM-stored settings.");
+            B("  • Manual Pin Control - HV converter, SA1, VIN_CTRL,");
+            B("    PMIC_CTRL, status LED, and the RFU pins.");
             Sep();
 
-            H("⑥ I2C Speed Reference");
-            B("  100 kHz  Standard – use for unknown / older devices.");
-            B("  400 kHz  Fast – compatible with all DDR4 SPD EEPROMs.");
-            B("  1 MHz    Fast-Plus – required by JEDEC DDR5 spec.");
+            H("⑥ CLI Mode");
+            B("Every operation is scriptable. Run UDFFlasher.exe with");
+            B("arguments to skip the GUI; results print to stdout, exit");
+            B("codes follow §5.3 (0=ok, 1=device, 2=I2C, 3=verify,");
+            B("4=CRC, 5=write, 6=usage). Use --auto-detect to skip");
+            B("--port. Examples:");
+            B("  UDFFlasher.exe ping --auto-detect");
+            B("  UDFFlasher.exe spd read 0x50 --port COM4 --out m.bin");
+            B("  UDFFlasher.exe spd verify 0x50 --in golden.bin");
             Sep();
 
             H("Troubleshooting");
-            B("• No ports in list → check USB cable and driver.");
-            B("• Ping fails → device may need a power cycle.");
-            B("• SPD read error → try a lower I2C speed.");
-            B("• PMIC not detected → check VIN_CTRL pin and power.");
+            B("• No ports listed → check USB cable and CDC driver.");
+            B("• Connect fails → unplug, replug, try a different cable.");
+            B("• SPD read errors → drop I2C speed one notch.");
+            B("• CRC FAIL on a fresh read → vendor XMP/EXPO blob may use");
+            B("  non-JEDEC CRC rules; the bytes can still be valid.");
+            B("• PMIC not detected → check the VIN_CTRL pin and 1.8 V");
+            B("  rail; some sticks need PMIC_CTRL toggled before scan.");
 
             rtb.SelectionStart = 0;
             group.Controls.Add(rtb);
@@ -380,7 +407,7 @@ namespace UnifiedDDRSPDFlasher
             _errorLogText.ScrollToCaret();
         }
 
-        public void SetDeviceProvider(Func<SPDToolDevice> deviceProvider) =>
+        public void SetDeviceProvider(Func<UDFDevice> deviceProvider) =>
             _deviceProvider = deviceProvider;
 
         public string GetSelectedPort() => _portCombo.SelectedItem?.ToString() ?? "";
@@ -419,7 +446,7 @@ namespace UnifiedDDRSPDFlasher
             }
         }
 
-        public void OnDeviceConnected(SPDToolDevice device)
+        public void OnDeviceConnected(UDFDevice device)
         {
             if (device == null) return;
             try
@@ -463,6 +490,10 @@ namespace UnifiedDDRSPDFlasher
         private void LoadPorts()
         {
             if (InvokeRequired) { Invoke(new Action(LoadPorts)); return; }
+
+            // §6.4: never repopulate the combobox while the user has it open -
+            // doing so closes the dropdown mid-click and confuses the selection.
+            if (_portCombo.DroppedDown) return;
 
             string current = _portCombo.SelectedItem?.ToString();
             _portCombo.Items.Clear();
@@ -511,8 +542,8 @@ namespace UnifiedDDRSPDFlasher
     /// </summary>
     internal sealed class AdvancedConfigDialog : Form
     {
-        private readonly SPDToolDevice _device;
-        private readonly Func<SPDToolDevice> _provider;
+        private readonly UDFDevice _device;
+        private readonly Func<UDFDevice> _provider;
         private readonly EventHandler _disconnectHandler;
         private readonly EventHandler _connectHandler;
         private readonly FlasherConfigTab _parent;
@@ -535,18 +566,18 @@ namespace UnifiedDDRSPDFlasher
 
         private static readonly (string name, byte id, string tip)[] PinDefs =
         {
-            ("HV Switch",     SPDToolDevice.PIN_HV_SWITCH,      "Opto-coupler that enables ~9 V HV programming for DDR3/4."),
-            ("SA1 Switch",    SPDToolDevice.PIN_SA1_SWITCH,     "Selects between two SPD devices on some adapters."),
-            ("Dev Status",    SPDToolDevice.PIN_DEV_STATUS,     "Status LED on the programmer board."),
-            ("HV Converter",  SPDToolDevice.PIN_HV_CONVERTER,  "Enable pin of the HV boost converter (DDR3/4 WP clearing)."),
-            ("DDR5 VIN Ctrl", SPDToolDevice.PIN_DDR5_VIN_CTRL, "DDR5 power-supply enable. Must be high for DDR5 access."),
-            ("PMIC CTRL",     SPDToolDevice.PIN_PMIC_CTRL,     "PWR_EN line of the PMIC. Forces all phases active."),
-            ("PMIC FLAG",     SPDToolDevice.PIN_PMIC_FLAG,     "PMIC PWR_GOOD input (read-only)."),
-            ("RFU1",          SPDToolDevice.PIN_RFU1,          "Reserved for future use."),
-            ("RFU2",          SPDToolDevice.PIN_RFU2,          "Reserved for future use."),
+            ("HV Switch",     UDFDevice.PIN_HV_SWITCH,      "Opto-coupler that enables ~9 V HV programming for DDR3/4."),
+            ("SA1 Switch",    UDFDevice.PIN_SA1_SWITCH,     "Selects between two SPD devices on some adapters."),
+            ("Dev Status",    UDFDevice.PIN_DEV_STATUS,     "Status LED on the programmer board."),
+            ("HV Converter",  UDFDevice.PIN_HV_CONVERTER,  "Enable pin of the HV boost converter (DDR3/4 WP clearing)."),
+            ("DDR5 VIN Ctrl", UDFDevice.PIN_DDR5_VIN_CTRL, "DDR5 power-supply enable. Must be high for DDR5 access."),
+            ("PMIC CTRL",     UDFDevice.PIN_PMIC_CTRL,     "PWR_EN line of the PMIC. Forces all phases active."),
+            ("PMIC FLAG",     UDFDevice.PIN_PMIC_FLAG,     "PMIC PWR_GOOD input (read-only)."),
+            ("RFU1",          UDFDevice.PIN_RFU1,          "Reserved for future use."),
+            ("RFU2",          UDFDevice.PIN_RFU2,          "Reserved for future use."),
         };
 
-        public AdvancedConfigDialog(SPDToolDevice device, Func<SPDToolDevice> provider,
+        public AdvancedConfigDialog(UDFDevice device, Func<UDFDevice> provider,
             EventHandler disconnectHandler, EventHandler connectHandler, FlasherConfigTab parent)
         {
             _device = device;
@@ -789,7 +820,7 @@ namespace UnifiedDDRSPDFlasher
                     Font = new Font("Segoe UI", 8F),
                     Height = 24,
                     Margin = new Padding(1),
-                    Enabled = _device != null && pinId != SPDToolDevice.PIN_PMIC_FLAG
+                    Enabled = _device != null && pinId != UDFDevice.PIN_PMIC_FLAG
                 };
                 hiBtn.Click += (s, e) =>
                 {
@@ -804,7 +835,7 @@ namespace UnifiedDDRSPDFlasher
                     Font = new Font("Segoe UI", 8F),
                     Height = 24,
                     Margin = new Padding(1),
-                    Enabled = _device != null && pinId != SPDToolDevice.PIN_PMIC_FLAG
+                    Enabled = _device != null && pinId != UDFDevice.PIN_PMIC_FLAG
                 };
                 loBtn.Click += (s, e) =>
                 {

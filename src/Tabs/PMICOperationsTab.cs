@@ -1,11 +1,11 @@
-﻿// UPDATED v3.2:
+// UPDATED v3.2:
 //  2.1 – Four separate Burn buttons replaced by a single "Burn" button + ComboBox selector.
 //  2.2 – "Lock Vendor Region" button removed from main UI (functionality kept in AdvancedPMICDialog).
 //  2.3 – "Read Measurements" button replaced by a live-updating Timer display in the PMIC Info group.
 //         Update rate is configurable – also moved to AdvancedPMICDialog.
 //  2.4 – "Enable Programmable Mode" moved from AdvancedPMICDialog to main tab button.
 
-using SPDTool;
+using UDFCore;
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -14,9 +14,9 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
-using static SPDTool.SPDToolDevice;
+using static UDFCore.UDFDevice;
 
-namespace UnifiedDDRSPDFlasher
+namespace UnifiedDDRFlasher
 {
     /// <summary>
     /// PMIC Operations Tab – version 3.1
@@ -52,8 +52,8 @@ namespace UnifiedDDRSPDFlasher
 
         #region Private Fields
 
-        private Func<SPDToolDevice> _deviceProvider;
-        private SPDToolDevice Device => _deviceProvider?.Invoke();
+        private Func<UDFDevice> _deviceProvider;
+        private UDFDevice Device => _deviceProvider?.Invoke();
 
         // Left side
         private RichTextBox _hexViewer;
@@ -205,7 +205,7 @@ namespace UnifiedDDRSPDFlasher
             _hexViewer = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 14F),
+                Font = new Font("Consolas", 9.5F),
                 ReadOnly = true,
                 BackColor = Color.White,
                 WordWrap = false,
@@ -234,7 +234,7 @@ namespace UnifiedDDRSPDFlasher
             _responseLog = new RichTextBox
             {
                 Dock = DockStyle.Fill,
-                Font = new Font("Consolas", 11F),
+                Font = new Font("Consolas", 9.5F),
                 ReadOnly = true,
                 BackColor = Color.FromArgb(248, 248, 248),
                 BorderStyle = BorderStyle.FixedSingle,
@@ -571,10 +571,10 @@ namespace UnifiedDDRSPDFlasher
             _responseLog.ScrollToCaret();
         }
 
-        public void SetDeviceProvider(Func<SPDToolDevice> deviceProvider) =>
+        public void SetDeviceProvider(Func<UDFDevice> deviceProvider) =>
             _deviceProvider = deviceProvider;
 
-        public void OnDeviceConnected(SPDToolDevice device)
+        public void OnDeviceConnected(UDFDevice device)
         {
             if (InvokeRequired) { Invoke(new Action(() => OnDeviceConnected(device))); return; }
             UpdateUIState(true);
@@ -701,9 +701,14 @@ namespace UnifiedDDRSPDFlasher
 
         private async void OnMeasurementTimerTick(object sender, EventArgs e)
         {
-            // Skip if another read is in progress or no device
+            // §6.3: Stop the timer before awaiting the background task. This
+            // prevents WinForms from queueing more Tick events while a long
+            // ReadAllMeasurements is in flight - the busy-flag alone isn't
+            // enough because the message pump can still post Tick to the UI
+            // thread and they accumulate during the await.
             if (_measurementBusy || Device == null || _currentPMICAddress == 0) return;
             _measurementBusy = true;
+            _measurementTimer.Stop();
             try
             {
                 var m = await Task.Run(() =>
@@ -723,6 +728,11 @@ namespace UnifiedDDRSPDFlasher
             finally
             {
                 _measurementBusy = false;
+                // Resume polling unless the form was disposed mid-await.
+                if (!IsDisposed && _currentPMICAddress != 0 && Device != null)
+                {
+                    try { _measurementTimer.Start(); } catch (ObjectDisposedException) { }
+                }
             }
         }
 
@@ -1407,7 +1417,7 @@ namespace UnifiedDDRSPDFlasher
             _hexViewer.Clear();
             _hexViewer.SuspendLayout();
 
-            _hexViewer.SelectionFont = new Font("Consolas", 13F, FontStyle.Bold);
+            _hexViewer.SelectionFont = new Font("Consolas", 9.5F, FontStyle.Bold);
             _hexViewer.SelectionColor = Color.FromArgb(0, 78, 152);
             _hexViewer.SelectionBackColor = Color.FromArgb(230, 238, 255);
             _hexViewer.AppendText("Offset    00 01 02 03 04 05 06 07  08 09 0A 0B 0C 0D 0E 0F   ASCII\n");
@@ -1419,7 +1429,7 @@ namespace UnifiedDDRSPDFlasher
             {
                 Color bg = rowBg[(i / 16) % 2];
 
-                _hexViewer.SelectionFont = new Font("Consolas", 13F);
+                _hexViewer.SelectionFont = new Font("Consolas", 9.5F);
                 _hexViewer.SelectionColor = Color.FromArgb(80, 80, 80);
                 _hexViewer.SelectionBackColor = bg;
                 _hexViewer.AppendText($"{i:X8}  ");
@@ -1607,7 +1617,7 @@ namespace UnifiedDDRSPDFlasher
 
     internal sealed class AdvancedPMICDialog : Form
     {
-        private readonly SPDToolDevice _device;
+        private readonly UDFDevice _device;
         private readonly byte _pmicAddress;
         private readonly string _pmicType;
         private readonly PMICOperationsTab _ownerTab;
@@ -1627,7 +1637,7 @@ namespace UnifiedDDRSPDFlasher
             ("10 s", 10000),
         };
 
-        public AdvancedPMICDialog(SPDToolDevice device, byte pmicAddress, string pmicType, PMICOperationsTab ownerTab)
+        public AdvancedPMICDialog(UDFDevice device, byte pmicAddress, string pmicType, PMICOperationsTab ownerTab)
         {
             _device = device;
             _pmicAddress = pmicAddress;
