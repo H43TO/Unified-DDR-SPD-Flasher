@@ -1,4 +1,4 @@
-﻿// AppSettings.cs – persistent application settings backed by a JSON file.
+// AppSettings.cs – persistent application settings backed by a JSON file.
 // Replaces Properties.Settings. Also stores PMIC vendor passwords.
 using System;
 using System.Collections.Generic;
@@ -9,7 +9,7 @@ public static class AppSettings
 {
     private static readonly string FilePath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "UnifiedDDRSPDFlasher",
+        "UnifiedDDRFlasher",
         "settings.json");
 
     // ── Connection settings ──────────────────────────────────────────────────
