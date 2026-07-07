@@ -7,7 +7,7 @@
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
-![The Unified DDR Flasher](img/device.jpg)
+![The Unified DDR Flasher](device.jpg)
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
@@ -80,7 +80,7 @@ extension board that takes UDIMM-form-factor modules:
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
-![UDF extension board with the main programmer](img/dev_full.jpg)
+![UDF extension board with the main programmer](dev_full.jpg)
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
@@ -128,7 +128,7 @@ the queue.
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
-![The Unified DDR Flasher GUI](img/app_spd.png)
+![The Unified DDR Flasher GUI](app_spd.png)
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
@@ -498,25 +498,8 @@ no code lifted from other projects.
 
 ## License
 
-The public source code in this repository is licensed under the
-**Apache License 2.0** — see [`LICENSE`](LICENSE) for the full text.
-In short: you may use, modify, and redistribute the source under the
-terms of that licence, including a patent grant.
-
-The following are **not** open-source and are distributed under
-proprietary terms:
-
-- **The compiled firmware** (`firmware/UDF_fw.uf2`) — provided for use
-  with hardware you purchased; redistribution is not permitted.
-- **The compiled communication library** (`lib/prebuilt/UDF-Core.dll`)
-  — same as above. The C# source for this library is not published.
-- **The hardware design itself** — schematics, layout, BOM and
-  fabrication files are not published. All the PCB are made by a reliable
-  manufacturing firm, and are assembled by me one at a time!
-
 If you want to use any of the proprietary components in a way the
 licence doesn't cover (commercial redistribution, OEM integration,
 contract manufacturing), just ask — I'm reasonable about it.
 
-© 2026 H43TO. Apache-licensed source as marked; all other rights
-reserved.
+© 2026 H43TO. all other rights reserved.
