@@ -84,15 +84,6 @@ extension board that takes UDIMM-form-factor modules:
 
 <!-- ─────────────────────────────────────────────────────────────── -->
 
-### Pricing
-
-Component costs keep moving, so this might change, but as of writing:
-
-| Item                                                          | Price |
-| ------------------------------------------------------------- | ----- |
-| Main board (DDR4 & DDR5 SO-DIMM support)                      | $150  |
-| Extension board (DDR4 & DDR5 UDIMM; more boards on the way)   | $25   |
-
 ### Ordering
 
 Orders go via a PayPal money request. Send me a message with:
