@@ -101,8 +101,8 @@ buyer. I ship from Hungary, usually via DHL, in a package that fits an
 A4 letter envelope. Other shipping arrangements are possible — just
 ask.
 
-**Availability (as of late June 2026):** the last batch sold out, and the
-next run ships around the middle-to-later half of August. You can order
+**Availability (as of October 2026):** the last batch sold out, and the
+next run ships around the early-to-middle half of November(maybe even late October, depending on how fast can I source components). You can order
 now, and you should - placing an order is how I reserve your unit and
 guarantee you one from the upcoming batch. It isn't a waitlist; the order
 *is* the reservation, and the earlier you place it, the earlier you're in
